@@ -22,7 +22,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     
-    renderer.setSize(100, 100);
+    renderer.setSize(140, 140);
     renderer.setClearColor(0x000000, 0);
     mountRef.current.appendChild(renderer.domElement);
 
@@ -48,8 +48,8 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
     const line = new THREE.LineSegments(wireframe, new THREE.LineBasicMaterial({ color: 0x000000, opacity: 0.3, transparent: true }));
     cubeGroup.add(line);
 
-    // Add face labels using canvas sprites
-    const labelTexts = ['R', 'L', 'T', 'B', 'F', 'K']; // Right, Left, Top, Bottom, Front, Back
+    // Add face labels using canvas sprites (full names)
+    const labelTexts = ['Right', 'Left', 'Top', 'Bottom', 'Front', 'Back'];
     const labelPositions = [
       new THREE.Vector3(0.51, 0, 0),    // Right
       new THREE.Vector3(-0.51, 0, 0),   // Left  
@@ -72,6 +72,10 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
       context.fillText(text, 32, 32);
       
       const texture = new THREE.CanvasTexture(canvas);
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.needsUpdate = true;
       const spriteMaterial = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
@@ -79,9 +83,26 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
       });
       const sprite = new THREE.Sprite(spriteMaterial);
       sprite.position.copy(labelPositions[index]);
-      sprite.scale.set(0.3, 0.3, 1);
+      sprite.scale.set(0.28, 0.28, 1);
       cubeGroup.add(sprite);
     });
+
+    // Side arrow indicators (simple triangles) for cardinal directions
+    const arrowMat = new THREE.MeshBasicMaterial({ color: 0x808080, transparent: true, opacity: 0.8, depthTest: false });
+    const tri = new THREE.ConeGeometry(0.08, 0.2, 3);
+    const arrows: { mesh: THREE.Mesh; id: string }[] = [];
+    const addArrow = (id: string, pos: THREE.Vector3, rot: THREE.Euler) => {
+      const m = new THREE.Mesh(tri, arrowMat);
+      m.position.copy(pos);
+      m.rotation.copy(rot);
+      m.renderOrder = 999;
+      cubeGroup.add(m);
+      arrows.push({ mesh: m, id });
+    };
+    addArrow('right', new THREE.Vector3(0.9, 0, 0), new THREE.Euler(0, 0, -Math.PI / 2));
+    addArrow('left', new THREE.Vector3(-0.9, 0, 0), new THREE.Euler(0, 0, Math.PI / 2));
+    addArrow('top', new THREE.Vector3(0, 0.9, 0), new THREE.Euler(0, 0, 0));
+    addArrow('bottom', new THREE.Vector3(0, -0.9, 0), new THREE.Euler(Math.PI, 0, 0));
 
     scene.add(cubeGroup);
     camera.position.set(2, 2, 2);
@@ -110,9 +131,11 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
         };
         cubeGroup.rotation.y += deltaMove.x * 0.01;
         cubeGroup.rotation.x += deltaMove.y * 0.01;
+        event.stopPropagation();
+        event.preventDefault();
       } else {
         raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObject(cube);
+        const intersects = raycaster.intersectObjects([cube, ...arrows.map(a => a.mesh)]);
 
         if (intersects.length > 0) {
           const faceIndex = intersects[0].face?.materialIndex;
@@ -131,6 +154,8 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
     const handleMouseDown = (event: MouseEvent) => {
       isDragging = true;
       previousMousePosition = { x: event.clientX, y: event.clientY };
+      event.stopPropagation();
+      event.preventDefault();
     };
 
     const handleMouseUp = () => {
@@ -145,12 +170,20 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObject(cube);
+      const intersects = raycaster.intersectObjects([cube, ...arrows.map(a => a.mesh)]);
 
       if (intersects.length > 0) {
-        const faceIndex = intersects[0].face?.materialIndex;
-        const faceNames = ['right', 'left', 'top', 'bottom', 'front', 'back'];
-        onViewChange(faceNames[faceIndex || 0]);
+        const obj = intersects[0].object;
+        if (obj === cube) {
+          const faceIndex = intersects[0].face?.materialIndex;
+          const faceNames = ['right', 'left', 'top', 'bottom', 'front', 'back'];
+          onViewChange(faceNames[faceIndex || 0]);
+        } else {
+          const arrow = arrows.find(a => a.mesh === obj);
+          if (arrow) {
+            onViewChange(arrow.id);
+          }
+        }
       }
     };
 
@@ -166,6 +199,17 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
     };
     animate();
 
+    // Listen to camera changes from main viewer so cube follows camera
+    const handleCameraChanged = (e: CustomEvent<{ q: [number, number, number, number] }>) => {
+      if (!cubeGroup) return;
+      const [x, y, z, w] = e.detail.q;
+      // Apply inverse to represent camera orientation on cube (so it matches view)
+      const q = new THREE.Quaternion(x, y, z, w).invert();
+      cubeGroup.setRotationFromQuaternion(q);
+    };
+
+    window.addEventListener('viewer-camera-changed', handleCameraChanged as EventListener);
+
     return () => {
       renderer.domElement.removeEventListener('mousemove', handleMouseMove);
       renderer.domElement.removeEventListener('mousedown', handleMouseDown);
@@ -173,6 +217,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
       renderer.domElement.removeEventListener('click', handleClick);
       mountRef.current?.removeChild(renderer.domElement);
       renderer.dispose();
+      window.removeEventListener('viewer-camera-changed', handleCameraChanged as EventListener);
     };
   }, [onViewChange]);
 
@@ -197,7 +242,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '' }) => 
     <div 
       ref={mountRef} 
       className={`view-cube ${className}`}
-      style={{ width: '100px', height: '100px' }}
+      style={{ width: '140px', height: '140px' }}
     />
   );
 };

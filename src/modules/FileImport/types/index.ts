@@ -23,19 +23,21 @@ export interface ViewerConfig {
   enableOrbitControls: boolean;
   pixelRatio: number;
   antialias: boolean;
+  cameraType?: 'perspective' | 'orthographic';
 }
 
 export const DEFAULT_VIEWER_CONFIG: ViewerConfig = {
-  backgroundColor: 0x111827, // Dark blue-gray
+  backgroundColor: 0xf3f4f6, // Light gray
   gridSize: 10,
-  showGrid: true,
+  showGrid: false,
   showAxes: true,
   enableOrbitControls: true,
   pixelRatio: Math.min(window.devicePixelRatio, 2),
   antialias: true,
+  cameraType: 'orthographic',
 };
 
-export const SUPPORTED_FORMATS = ['.stl', '.obj', '.ply'];
+export const SUPPORTED_FORMATS = ['.stl'];
 
 export type ViewOrientation = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
 
@@ -46,4 +48,5 @@ export interface ViewerHandle {
   setOrientation: (orientation: ViewOrientation) => void;
   fitToView: () => void;
   dispose: () => void;
+  createOrUpdateBaseplate: (extraXY: number, height: number) => void;
 }

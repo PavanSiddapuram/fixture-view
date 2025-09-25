@@ -33,6 +33,14 @@ const FileImport = ({ onFileLoaded }: FileImportProps) => {
       // Add new mesh and fit view
       viewer.addMesh(processedFile.mesh);
       viewer.resetView();
+      // Auto-create a baseplate under the part with default parameters
+      // If viewer is not yet initialized, retry on next frame
+      const createPlate = () => viewer.createOrUpdateBaseplate(10, 10);
+      if (viewer.isReady) {
+        createPlate();
+      } else {
+        requestAnimationFrame(createPlate);
+      }
       
       setCurrentFile(processedFile);
       onFileLoaded?.(processedFile);

@@ -175,9 +175,9 @@ export function useFileProcessing(): UseFileProcessingReturn {
       
       // Create material and mesh
       const material = new THREE.MeshStandardMaterial({
-        color: 0x00bcd4, // Cyan color
-        roughness: 0.3,
-        metalness: 0.1,
+        color: 0xb0b0b0, // Neutral gray
+        roughness: 0.6,
+        metalness: 0.0,
         flatShading: false,
       });
       

@@ -111,7 +111,7 @@ const FileDropzone = ({ onFileSelected, isProcessing = false, className = "" }: 
             </div>
             <div className="flex items-center justify-center gap-2 mt-1 text-xs text-muted-foreground font-tech">
               <AlertCircle className="w-3 h-3" />
-              <span>Maximum file size: 50MB</span>
+              <span>Maximum file size: 5MB</span>
             </div>
           </div>
         )}

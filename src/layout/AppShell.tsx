@@ -44,7 +44,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.stl,.obj,.ply';
+      input.accept = '.stl';
       input.onchange = (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
@@ -228,7 +228,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         <div className="flex-1 flex overflow-hidden">
           {/* Left Vertical Toolbar */}
           <aside className="w-14 border-r border-border/50 tech-glass flex flex-col justify-center">
-            <VerticalToolbar />
+            <VerticalToolbar 
+              onToolSelect={(toolId) => {
+                if (toolId === 'import') {
+                  handleOpenFilePicker();
+                }
+              }}
+            />
           </aside>
 
           {/* Main Viewport */}

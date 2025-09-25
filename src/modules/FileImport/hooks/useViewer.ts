@@ -84,10 +84,10 @@ function createViewerAxes(): THREE.Group {
 }
 
 // Update viewer axes position and orientation based on camera
-function updateViewerAxes(axesGroup: THREE.Group, camera: THREE.PerspectiveCamera) {
+function updateViewerAxes(axesGroup: THREE.Group, camera: THREE.Camera) {
   // Position in bottom-left corner of the view
   const position = new THREE.Vector3();
-  camera.getWorldPosition(position);
+  (camera as any).getWorldPosition ? (camera as any).getWorldPosition(position) : position.set(0, 0, 0);
   
   // Get camera direction
   const direction = new THREE.Vector3();
@@ -97,8 +97,8 @@ function updateViewerAxes(axesGroup: THREE.Group, camera: THREE.PerspectiveCamer
   const rightVector = new THREE.Vector3();
   const upVector = new THREE.Vector3();
   
-  rightVector.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-  upVector.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  rightVector.setFromMatrixColumn((camera as any).matrixWorld, 0).normalize();
+  upVector.setFromMatrixColumn((camera as any).matrixWorld, 1).normalize();
   
   // Calculate position for bottom-left corner
   const distance = 2; // Distance from camera
@@ -110,9 +110,9 @@ function updateViewerAxes(axesGroup: THREE.Group, camera: THREE.PerspectiveCamer
     .add(offsetForward)
     .add(offsetRight)
     .add(offsetUp);
-  
-  // Keep axes oriented with world coordinates (don't rotate with camera)
-  axesGroup.rotation.set(0, 0, 0);
+
+  // Rotate axes to match camera orientation, so orientation is intuitive
+  axesGroup.quaternion.copy((camera as any).quaternion);
 }
 
 interface UseViewerReturn extends ViewerHandle {
@@ -125,14 +125,20 @@ export function useViewer(
 ): UseViewerReturn {
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const meshesRef = useRef<THREE.Mesh[]>([]);
   const animationIdRef = useRef<number | null>(null);
   const gridHelperRef = useRef<THREE.GridHelper | null>(null);
   const axesHelperRef = useRef<THREE.AxesHelper | null>(null);
   const viewerAxesRef = useRef<THREE.Group | null>(null);
+  const baseplateRef = useRef<THREE.Mesh | null>(null);
+  const groundRef = useRef<THREE.Mesh | null>(null);
+  const overlaySceneRef = useRef<THREE.Scene | null>(null);
+  const overlayCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const centerCrossRef = useRef<THREE.LineSegments | null>(null);
   const isInitializedRef = useRef(false);
+  const tmpQuatArray: [number, number, number, number] = [0, 0, 0, 1];
 
   // Initialize Three.js scene
   const initializeScene = useCallback(() => {
@@ -146,10 +152,22 @@ export function useViewer(
     scene.background = new THREE.Color(config.backgroundColor);
     sceneRef.current = scene;
 
-    // Camera
-    const camera = new THREE.PerspectiveCamera(75, rect.width / rect.height, 0.1, 1000);
-    camera.position.set(5, 5, 5);
-    camera.lookAt(0, 0, 0);
+    // Camera (orthographic default to match FixtureMate-like view)
+    let camera: THREE.Camera;
+    if (config.cameraType === 'orthographic') {
+      const aspect = rect.width / rect.height;
+      const s = 5; // initial half-height size, will be fit later
+      const ortho = new THREE.OrthographicCamera(-s * aspect, s * aspect, s, -s, -1000, 1000);
+      ortho.position.set(5, 5, 5);
+      ortho.up.set(0, 1, 0);
+      ortho.lookAt(0, 0, 0);
+      camera = ortho;
+    } else {
+      const persp = new THREE.PerspectiveCamera(75, rect.width / rect.height, 0.1, 1000);
+      persp.position.set(5, 5, 5);
+      persp.lookAt(0, 0, 0);
+      camera = persp;
+    }
     cameraRef.current = camera;
 
     // Renderer
@@ -161,7 +179,7 @@ export function useViewer(
     renderer.setPixelRatio(config.pixelRatio);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMapping = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1;
     rendererRef.current = renderer;
 
@@ -178,14 +196,14 @@ export function useViewer(
     }
 
     // Lights
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
     scene.add(ambientLight);
 
-    const hemisphereLight = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.3);
+    const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x888888, 0.4);
     scene.add(hemisphereLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(10, 10, 5);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 15, 10);
     directionalLight.castShadow = true;
     directionalLight.shadow.mapSize.width = 2048;
     directionalLight.shadow.mapSize.height = 2048;
@@ -199,14 +217,52 @@ export function useViewer(
       gridHelper.material.color.setHex(0x333333);
       gridHelper.material.opacity = 0.5;
       gridHelper.material.transparent = true;
+      gridHelper.position.y = -0.001; // keep slightly under the bed for better contrast
       scene.add(gridHelper);
       gridHelperRef.current = gridHelper;
     }
 
-    // Custom viewer axes (bottom-left corner)
-    const viewerAxes = createViewerAxes();
-    scene.add(viewerAxes);
-    viewerAxesRef.current = viewerAxes;
+    // Overlay scene/camera for bottom-left axes (fixed size position)
+    const overlayScene = new THREE.Scene();
+    const overlayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    overlayCam.position.set(0, 0, 2);
+    overlayCam.lookAt(0, 0, 0);
+    const overlayAxes = createViewerAxes();
+    overlayAxes.scale.setScalar(0.6);
+    overlayAxes.traverse((obj) => {
+      const mat = (obj as THREE.Mesh).material as any;
+      if (mat && mat.depthTest !== undefined) mat.depthTest = false;
+      (obj as any).renderOrder = 999;
+    });
+    overlayScene.add(overlayAxes);
+    overlaySceneRef.current = overlayScene;
+    overlayCameraRef.current = overlayCam;
+    viewerAxesRef.current = overlayAxes;
+
+    // Large center X/Y axes (pre-import visual)
+    {
+      const length = 100;
+      const positions = new Float32Array([
+        // X axis (red)
+        -length, 0, 0,   length, 0, 0,
+        // Y axis (green)
+        0, -length, 0,   0, length, 0,
+      ]);
+      const colors = new Float32Array([
+        // red
+        1, 0, 0,   1, 0, 0,
+        // green
+        0, 1, 0,   0, 1, 0,
+      ]);
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const mat = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 2, transparent: true, opacity: 0.9 });
+      const lines = new THREE.LineSegments(geom, mat);
+      lines.renderOrder = -1;
+      scene.add(lines);
+      centerCrossRef.current = lines;
+    }
 
     // Standard axes helper (optional, can be disabled)
     if (config.showAxes) {
@@ -226,12 +282,31 @@ export function useViewer(
         controlsRef.current.update();
       }
 
-      // Update viewer axes to match camera orientation
-      if (viewerAxesRef.current && cameraRef.current) {
-        updateViewerAxes(viewerAxesRef.current, cameraRef.current);
-      }
-      
+      // Render main scene
       renderer.render(scene, camera);
+
+      // Render overlay axes in a fixed bottom-left viewport
+      if (overlaySceneRef.current && overlayCameraRef.current && viewerAxesRef.current && cameraRef.current) {
+        viewerAxesRef.current.quaternion.copy((cameraRef.current as any).quaternion);
+        const size = renderer.getSize(new THREE.Vector2());
+        const px = 96;
+        const pad = 8;
+        renderer.setScissorTest(true);
+        renderer.setScissor(pad, pad, px, px);
+        renderer.setViewport(pad, pad, px, px);
+        renderer.clearDepth();
+        renderer.render(overlaySceneRef.current, overlayCameraRef.current);
+        renderer.setScissorTest(false);
+        renderer.setViewport(0, 0, size.x, size.y);
+      }
+
+      // Broadcast camera quaternion so ViewCube can follow
+      const q = (camera as THREE.Camera as any).quaternion as THREE.Quaternion;
+      if (q) {
+        tmpQuatArray[0] = q.x; tmpQuatArray[1] = q.y; tmpQuatArray[2] = q.z; tmpQuatArray[3] = q.w;
+        const evt = new CustomEvent('viewer-camera-changed', { detail: { q: tmpQuatArray } });
+        window.dispatchEvent(evt);
+      }
     };
     animate();
 
@@ -240,8 +315,18 @@ export function useViewer(
       if (!containerRef.current) return;
       
       const newRect = containerRef.current.getBoundingClientRect();
-      camera.aspect = newRect.width / newRect.height;
-      camera.updateProjectionMatrix();
+      if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+        const persp = camera as THREE.PerspectiveCamera;
+        persp.aspect = newRect.width / newRect.height;
+        persp.updateProjectionMatrix();
+      } else if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+        const ortho = camera as THREE.OrthographicCamera;
+        const aspect = newRect.width / newRect.height;
+        const halfH = (ortho.top - ortho.bottom) / 2;
+        ortho.left = -halfH * aspect;
+        ortho.right = halfH * aspect;
+        ortho.updateProjectionMatrix();
+      }
       renderer.setSize(newRect.width, newRect.height);
     };
 
@@ -322,18 +407,34 @@ export function useViewer(
     const camera = cameraRef.current;
     const controls = controlsRef.current;
 
-    // Calculate distance to fit the object in view
-    const fov = camera.fov * (Math.PI / 180);
-    const distance = Math.abs(boundingSphere.radius / Math.sin(fov / 2)) * 1.2;
-
-    // Position camera
-    const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize();
-    camera.position.copy(boundingSphere.center).add(direction.multiplyScalar(distance));
-    
-    controls.target.copy(boundingSphere.center);
-    controls.minDistance = distance * 0.1;
-    controls.maxDistance = distance * 10;
-    controls.update();
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const persp = camera as THREE.PerspectiveCamera;
+      const fov = persp.fov * (Math.PI / 180);
+      const distance = Math.abs(boundingSphere.radius / Math.sin(fov / 2)) * 1.2;
+      const direction = new THREE.Vector3().subVectors(persp.position, controls.target).normalize();
+      persp.position.copy(boundingSphere.center).add(direction.multiplyScalar(distance));
+      controls.target.copy(boundingSphere.center);
+      controls.minDistance = distance * 0.1;
+      controls.maxDistance = distance * 10;
+      controls.update();
+    } else if ((camera as THREE.OrthographicCamera).isOrthographicCamera) {
+      const ortho = camera as THREE.OrthographicCamera;
+      const box = new THREE.Box3();
+      meshesRef.current.forEach(mesh => box.expandByObject(mesh));
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const aspect = rendererRef.current ? rendererRef.current.domElement.clientWidth / rendererRef.current.domElement.clientHeight : 1;
+      const margin = 1.2;
+      const halfH = (Math.max(size.y, size.z) * 0.5) * margin; // Y up; fit Z vertically in screen
+      ortho.top = halfH;
+      ortho.bottom = -halfH;
+      ortho.left = -halfH * aspect;
+      ortho.right = halfH * aspect;
+      ortho.position.set(boundingSphere.center.x + halfH, boundingSphere.center.y + halfH, boundingSphere.center.z + halfH);
+      controls.target.copy(boundingSphere.center);
+      ortho.updateProjectionMatrix();
+      controls.update();
+    }
   }, [computeBoundingSphere]);
 
   const resetView = useCallback(() => {
@@ -341,14 +442,12 @@ export function useViewer(
 
     const boundingSphere = computeBoundingSphere();
     if (boundingSphere) {
-      // Center models at origin and fit to view
-      meshesRef.current.forEach(mesh => {
-        mesh.position.sub(boundingSphere.center);
-        mesh.position.y += boundingSphere.radius; // Sit on ground
-      });
-      
       // Reset camera position
-      cameraRef.current.position.set(5, 5, 5);
+      if ((cameraRef.current as THREE.PerspectiveCamera).isPerspectiveCamera) {
+        (cameraRef.current as THREE.PerspectiveCamera).position.set(5, 5, 5);
+      } else if ((cameraRef.current as THREE.OrthographicCamera).isOrthographicCamera) {
+        (cameraRef.current as THREE.OrthographicCamera).position.set(5, 5, 5);
+      }
       controlsRef.current.target.set(0, 0, 0);
       controlsRef.current.update();
       
@@ -405,6 +504,65 @@ export function useViewer(
     controls.update();
   }, [computeBoundingSphere]);
 
+  const createOrUpdateBaseplate = useCallback((extraXY: number, height: number) => {
+    if (!sceneRef.current) return;
+    // Compute bounding box of current meshes
+    const box = new THREE.Box3();
+    meshesRef.current.forEach(mesh => box.expandByObject(mesh));
+    if (!box.isEmpty()) {
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      box.getSize(size);
+      box.getCenter(center);
+
+      const plateWidth = size.x + 2 * extraXY;
+      const plateDepth = size.z + 2 * extraXY;
+      const minY = box.min.y;
+
+      const geometry = new THREE.BoxGeometry(plateWidth, height, plateDepth);
+      const material = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.9, metalness: 0.0 });
+
+      if (!baseplateRef.current) {
+        baseplateRef.current = new THREE.Mesh(geometry, material);
+        baseplateRef.current.receiveShadow = true;
+        sceneRef.current.add(baseplateRef.current);
+      } else {
+        baseplateRef.current.geometry.dispose();
+        baseplateRef.current.geometry = geometry;
+        // Replace material safely (explicit dispose can be added later if needed)
+        baseplateRef.current.material = material;
+      }
+
+      // Place baseplate so its TOP is at y = 0 (bed plane)
+      baseplateRef.current.position.set(center.x, height / 2, center.z);
+
+      // Drop the model so its bottom sits on the bed (y=0)
+      const dropDy = -minY;
+      if (dropDy !== 0) {
+        meshesRef.current.forEach(mesh => {
+          mesh.position.y += dropDy;
+        });
+      }
+
+      // Add/update a large ground plane so it doesn't feel like the edge
+      const maxSide = Math.max(plateWidth, plateDepth);
+      const planeSize = maxSide * 5; // scale factor
+      const planeGeom = new THREE.PlaneGeometry(planeSize, planeSize);
+      planeGeom.rotateX(-Math.PI / 2);
+      const planeMat = new THREE.MeshStandardMaterial({ color: 0xf5f5f5, roughness: 1.0, metalness: 0, side: THREE.DoubleSide });
+      if (!groundRef.current) {
+        groundRef.current = new THREE.Mesh(planeGeom, planeMat);
+        groundRef.current.receiveShadow = true;
+        groundRef.current.position.set(center.x, 0, center.z);
+        sceneRef.current.add(groundRef.current);
+      } else {
+        groundRef.current.geometry.dispose();
+        groundRef.current.geometry = planeGeom;
+        groundRef.current.position.set(center.x, 0, center.z);
+      }
+    }
+  }, []);
+
   const dispose = useCallback(() => {
     // Clean up meshes
     meshesRef.current.forEach(mesh => {
@@ -444,5 +602,6 @@ export function useViewer(
     fitToView,
     dispose,
     isReady: isInitializedRef.current,
+    createOrUpdateBaseplate,
   };
 }
