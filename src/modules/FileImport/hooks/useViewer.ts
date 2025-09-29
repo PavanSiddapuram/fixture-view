@@ -8,43 +8,43 @@ function createViewerAxes(): THREE.Group {
   const axesGroup = new THREE.Group();
   
   // X Axis (Red)
-  const xGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.8, 8);
-  const xMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+  const xGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.8, 12);
+  const xMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8, depthWrite: false });
   const xAxis = new THREE.Mesh(xGeometry, xMaterial);
   xAxis.rotation.z = -Math.PI / 2;
   xAxis.position.x = 0.4;
   axesGroup.add(xAxis);
 
   // X Arrow
-  const xArrowGeometry = new THREE.ConeGeometry(0.02, 0.08, 8);
+  const xArrowGeometry = new THREE.ConeGeometry(0.04, 0.12, 12);
   const xArrow = new THREE.Mesh(xArrowGeometry, xMaterial);
   xArrow.rotation.z = -Math.PI / 2;
   xArrow.position.x = 0.84;
   axesGroup.add(xArrow);
 
   // Y Axis (Green)
-  const yGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.8, 8);
-  const yMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+  const yGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.8, 12);
+  const yMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8, depthWrite: false });
   const yAxis = new THREE.Mesh(yGeometry, yMaterial);
   yAxis.position.y = 0.4;
   axesGroup.add(yAxis);
 
   // Y Arrow
-  const yArrowGeometry = new THREE.ConeGeometry(0.02, 0.08, 8);
+  const yArrowGeometry = new THREE.ConeGeometry(0.04, 0.12, 12);
   const yArrow = new THREE.Mesh(yArrowGeometry, yMaterial);
   yArrow.position.y = 0.84;
   axesGroup.add(yArrow);
 
   // Z Axis (Blue)
-  const zGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.8, 8);
-  const zMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+  const zGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.8, 12);
+  const zMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff, transparent: true, opacity: 0.8, depthWrite: false });
   const zAxis = new THREE.Mesh(zGeometry, zMaterial);
   zAxis.rotation.x = Math.PI / 2;
   zAxis.position.z = 0.4;
   axesGroup.add(zAxis);
 
   // Z Arrow
-  const zArrowGeometry = new THREE.ConeGeometry(0.02, 0.08, 8);
+  const zArrowGeometry = new THREE.ConeGeometry(0.04, 0.12, 12);
   const zArrow = new THREE.Mesh(zArrowGeometry, zMaterial);
   zArrow.rotation.x = Math.PI / 2;
   zArrow.position.z = 0.84;
@@ -72,7 +72,9 @@ function createViewerAxes(): THREE.Group {
     const texture = new THREE.CanvasTexture(canvas);
     const spriteMaterial = new THREE.SpriteMaterial({ 
       map: texture, 
-      transparent: true
+      transparent: true,
+      depthWrite: false,
+      depthTest: false
     });
     const sprite = new THREE.Sprite(spriteMaterial);
     sprite.position.copy(label.position);
@@ -117,6 +119,7 @@ function updateViewerAxes(axesGroup: THREE.Group, camera: THREE.Camera) {
 
 interface UseViewerReturn extends ViewerHandle {
   isReady: boolean;
+  clearBaseplate: () => void;
 }
 
 export function useViewer(
@@ -136,21 +139,58 @@ export function useViewer(
   const groundRef = useRef<THREE.Mesh | null>(null);
   const overlaySceneRef = useRef<THREE.Scene | null>(null);
   const overlayCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const overlayRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const centerCrossRef = useRef<THREE.LineSegments | null>(null);
+  const updateCenterCrossLength = useCallback((length: number) => {
+    if (!sceneRef.current) return;
+    // Remove existing
+    if (centerCrossRef.current) {
+      sceneRef.current.remove(centerCrossRef.current);
+      (centerCrossRef.current.geometry as THREE.BufferGeometry)?.dispose();
+      (centerCrossRef.current.material as THREE.LineBasicMaterial)?.dispose();
+      centerCrossRef.current = null;
+    }
+
+    const positions = new Float32Array([
+      // X axis (red)
+      -length, 0, 0,   length, 0, 0,
+      // Y axis (green)
+      0, -length, 0,   0, length, 0,
+    ]);
+    const colors = new Float32Array([
+      1, 0, 0,   1, 0, 0,
+      0, 1, 0,   0, 1, 0,
+    ]);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const mat = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 2, transparent: true, opacity: 0.9 });
+    const lines = new THREE.LineSegments(geom, mat);
+    lines.renderOrder = -1;
+    lines.visible = true;
+    sceneRef.current.add(lines);
+    centerCrossRef.current = lines;
+  }, []);
   const isInitializedRef = useRef(false);
   const tmpQuatArray: [number, number, number, number] = [0, 0, 0, 1];
 
   // Initialize Three.js scene
   const initializeScene = useCallback(() => {
-    if (!containerRef.current || isInitializedRef.current) return;
+    if (!containerRef.current || isInitializedRef.current) {
+      console.log('Viewer initialization skipped - container:', !!containerRef.current, 'initialized:', isInitializedRef.current);
+      return;
+    }
 
+    console.log('Starting viewer initialization...');
     const container = containerRef.current;
     const rect = container.getBoundingClientRect();
+    console.log('Container dimensions:', rect.width, 'x', rect.height);
 
     // Scene
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(config.backgroundColor);
     sceneRef.current = scene;
+    console.log('Scene created:', scene);
 
     // Camera (orthographic default to match FixtureMate-like view)
     let camera: THREE.Camera;
@@ -181,6 +221,7 @@ export function useViewer(
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.NoToneMapping;
     renderer.toneMappingExposure = 1;
+    renderer.autoClear = true; // let renderer handle color clears; we'll only clear depth for overlay HUD
     rendererRef.current = renderer;
 
     // Controls
@@ -222,13 +263,14 @@ export function useViewer(
       gridHelperRef.current = gridHelper;
     }
 
-    // Overlay scene/camera for bottom-left axes (fixed size position)
+    // Overlay scene/camera + dedicated transparent renderer for bottom-left axes
     const overlayScene = new THREE.Scene();
     const overlayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
     overlayCam.position.set(0, 0, 2);
     overlayCam.lookAt(0, 0, 0);
     const overlayAxes = createViewerAxes();
-    overlayAxes.scale.setScalar(0.6);
+    overlayAxes.scale.setScalar(0.65);
+    overlayAxes.visible = true;
     overlayAxes.traverse((obj) => {
       const mat = (obj as THREE.Mesh).material as any;
       if (mat && mat.depthTest !== undefined) mat.depthTest = false;
@@ -239,30 +281,15 @@ export function useViewer(
     overlayCameraRef.current = overlayCam;
     viewerAxesRef.current = overlayAxes;
 
+    // Create a second transparent renderer just for the axes HUD
+    const overlayRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    overlayRenderer.setSize(112, 112);
+    overlayRenderer.setPixelRatio(config.pixelRatio);
+    overlayRenderer.setClearColor(0x000000, 0); // fully transparent
+    overlayRendererRef.current = overlayRenderer;
+
     // Large center X/Y axes (pre-import visual)
-    {
-      const length = 100;
-      const positions = new Float32Array([
-        // X axis (red)
-        -length, 0, 0,   length, 0, 0,
-        // Y axis (green)
-        0, -length, 0,   0, length, 0,
-      ]);
-      const colors = new Float32Array([
-        // red
-        1, 0, 0,   1, 0, 0,
-        // green
-        0, 1, 0,   0, 1, 0,
-      ]);
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-      const mat = new THREE.LineBasicMaterial({ vertexColors: true, linewidth: 2, transparent: true, opacity: 0.9 });
-      const lines = new THREE.LineSegments(geom, mat);
-      lines.renderOrder = -1;
-      scene.add(lines);
-      centerCrossRef.current = lines;
-    }
+    { updateCenterCrossLength(100); }
 
     // Standard axes helper (optional, can be disabled)
     if (config.showAxes) {
@@ -273,6 +300,22 @@ export function useViewer(
 
     // Add to container
     container.appendChild(renderer.domElement);
+    // Position the overlay axes canvas bottom-left on top of main canvas
+    const hud = overlayRenderer.domElement;
+    hud.style.position = 'absolute';
+    hud.style.left = '8px';
+    hud.style.bottom = '8px';
+    hud.style.width = '112px';
+    hud.style.height = '112px';
+    hud.style.pointerEvents = 'none';
+    hud.style.background = 'transparent';
+    hud.style.backgroundColor = 'transparent';
+    container.appendChild(hud);
+    console.log('Renderer added to container. DOM element:', renderer.domElement);
+
+    // Test render
+    renderer.render(scene, camera);
+    console.log('Initial test render completed');
 
     // Start render loop
     const animate = () => {
@@ -285,19 +328,10 @@ export function useViewer(
       // Render main scene
       renderer.render(scene, camera);
 
-      // Render overlay axes in a fixed bottom-left viewport
-      if (overlaySceneRef.current && overlayCameraRef.current && viewerAxesRef.current && cameraRef.current) {
+      // Render overlay axes using dedicated transparent renderer
+      if (overlayRendererRef.current && overlaySceneRef.current && overlayCameraRef.current && viewerAxesRef.current && cameraRef.current) {
         viewerAxesRef.current.quaternion.copy((cameraRef.current as any).quaternion);
-        const size = renderer.getSize(new THREE.Vector2());
-        const px = 96;
-        const pad = 8;
-        renderer.setScissorTest(true);
-        renderer.setScissor(pad, pad, px, px);
-        renderer.setViewport(pad, pad, px, px);
-        renderer.clearDepth();
-        renderer.render(overlaySceneRef.current, overlayCameraRef.current);
-        renderer.setScissorTest(false);
-        renderer.setViewport(0, 0, size.x, size.y);
+        overlayRendererRef.current.render(overlaySceneRef.current, overlayCameraRef.current);
       }
 
       // Broadcast camera quaternion so ViewCube can follow
@@ -342,6 +376,12 @@ export function useViewer(
       if (container && renderer.domElement) {
         container.removeChild(renderer.domElement);
       }
+      if (overlayRendererRef.current) {
+        const hud = overlayRendererRef.current.domElement;
+        if (hud && hud.parentElement === container) container.removeChild(hud);
+        overlayRendererRef.current.dispose();
+        overlayRendererRef.current = null;
+      }
       renderer.dispose();
       isInitializedRef.current = false;
     };
@@ -349,39 +389,114 @@ export function useViewer(
 
   // Initialize when container is available
   useEffect(() => {
+    console.log('useViewer effect triggered, container:', !!containerRef.current);
     if (containerRef.current) {
+      console.log('Initializing viewer with container:', containerRef.current);
       return initializeScene();
     }
-  }, [initializeScene]);
-
-  // Event listeners for app shell communication
-  useEffect(() => {
-    const handleReset = () => resetView();
-    const handleOrientation = (e: CustomEvent) => setOrientation(e.detail);
-
-    window.addEventListener('viewer-reset', handleReset);
-    window.addEventListener('viewer-orientation', handleOrientation as EventListener);
-
-    return () => {
-      window.removeEventListener('viewer-reset', handleReset);
-      window.removeEventListener('viewer-orientation', handleOrientation as EventListener);
-    };
-  }, []);
+  }, [initializeScene, containerRef]);
 
   const addMesh = useCallback((mesh: THREE.Mesh) => {
-    if (!sceneRef.current) return;
+    console.log('addMesh called with mesh:', mesh);
+    console.log('Scene exists:', !!sceneRef.current);
+    console.log('Current meshes count:', meshesRef.current.length);
 
-    sceneRef.current.add(mesh);
-    meshesRef.current.push(mesh);
+    if (!sceneRef.current) {
+      console.error('Cannot add mesh: scene not initialized');
+      return;
+    }
+
+    try {
+      sceneRef.current.add(mesh);
+      meshesRef.current.push(mesh);
+      console.log('Mesh added successfully. Total meshes:', meshesRef.current.length);
+      console.log('Scene children count:', sceneRef.current.children.length);
+
+      // Force a render update
+      if (rendererRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+        console.log('Manual render completed');
+      }
+
+      // Recenter large XY cross to model center if present
+      if (centerCrossRef.current) {
+        const box = new THREE.Box3();
+        box.expandByObject(mesh);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        centerCrossRef.current.position.copy(center);
+      }
+
+      // Scale large XY cross based on model size
+      const bs = computeBoundingSphere();
+      if (bs) {
+        const dynLen = Math.max(1, bs.radius * 2);
+        updateCenterCrossLength(dynLen);
+        if (centerCrossRef.current) centerCrossRef.current.position.copy(bs.center);
+      }
+    } catch (error) {
+      console.error('Error adding mesh:', error);
+    }
   }, []);
 
-  const removeMesh = useCallback((mesh: THREE.Mesh) => {
+  const removeMesh = useCallback((mesh?: THREE.Mesh) => {
     if (!sceneRef.current) return;
 
-    sceneRef.current.remove(mesh);
-    const index = meshesRef.current.indexOf(mesh);
-    if (index > -1) {
-      meshesRef.current.splice(index, 1);
+    if (mesh) {
+      sceneRef.current.remove(mesh);
+      const index = meshesRef.current.indexOf(mesh);
+      if (index > -1) {
+        meshesRef.current.splice(index, 1);
+      }
+    } else {
+      // Remove all tracked meshes
+      meshesRef.current.forEach(m => sceneRef.current!.remove(m));
+      meshesRef.current = [];
+    }
+
+    // If meshes remain, recenter cross to their combined center; otherwise reset to origin
+    if (centerCrossRef.current) {
+      if (meshesRef.current.length > 0) {
+        const box = new THREE.Box3();
+        meshesRef.current.forEach(m => box.expandByObject(m));
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        centerCrossRef.current.position.copy(center);
+      } else {
+        centerCrossRef.current.position.set(0, 0, 0);
+      }
+    }
+  }, []);
+
+  const clearBaseplate = useCallback(() => {
+    if (!sceneRef.current) return;
+
+    // Remove baseplate
+    if (baseplateRef.current) {
+      sceneRef.current.remove(baseplateRef.current);
+      if (baseplateRef.current.geometry) baseplateRef.current.geometry.dispose();
+      if (baseplateRef.current.material) {
+        if (Array.isArray(baseplateRef.current.material)) {
+          baseplateRef.current.material.forEach(m => m.dispose());
+        } else {
+          baseplateRef.current.material.dispose();
+        }
+      }
+      baseplateRef.current = null;
+    }
+
+    // Remove ground
+    if (groundRef.current) {
+      sceneRef.current.remove(groundRef.current);
+      if (groundRef.current.geometry) groundRef.current.geometry.dispose();
+      if (groundRef.current.material) {
+        if (Array.isArray(groundRef.current.material)) {
+          groundRef.current.material.forEach(m => m.dispose());
+        } else {
+          groundRef.current.material.dispose();
+        }
+      }
+      groundRef.current = null;
     }
   }, []);
 
@@ -434,8 +549,16 @@ export function useViewer(
       controls.target.copy(boundingSphere.center);
       ortho.updateProjectionMatrix();
       controls.update();
+
+      // Keep large XY cross at model center
+      if (centerCrossRef.current) {
+        centerCrossRef.current.position.copy(boundingSphere.center);
+      }
+      // Adjust large XY cross length to fit model comfortably
+      const dynLen = Math.max(1, boundingSphere.radius * 2);
+      updateCenterCrossLength(dynLen);
     }
-  }, [computeBoundingSphere]);
+  }, [computeBoundingSphere, updateCenterCrossLength]);
 
   const resetView = useCallback(() => {
     if (!cameraRef.current || !controlsRef.current) return;
@@ -450,7 +573,7 @@ export function useViewer(
       }
       controlsRef.current.target.set(0, 0, 0);
       controlsRef.current.update();
-      
+
       fitToView();
     } else {
       // Default view when no meshes
@@ -463,9 +586,9 @@ export function useViewer(
   const setOrientation = useCallback((orientation: ViewOrientation) => {
     if (!cameraRef.current || !controlsRef.current) return;
 
-    const boundingSphere = computeBoundingSphere();
-    const center = boundingSphere?.center || new THREE.Vector3(0, 0, 0);
-    const radius = boundingSphere?.radius || 5;
+    const bs = computeBoundingSphere();
+    const center = bs?.center || new THREE.Vector3(0, 0, 0);
+    const radius = bs?.radius || 5;
     const distance = radius * 3;
 
     const camera = cameraRef.current;
@@ -494,7 +617,8 @@ export function useViewer(
         break;
       case 'iso':
       default:
-        position = new THREE.Vector3(distance * 0.7, distance * 0.7, distance * 0.7);
+        // Use (-X, +Y, +Z) octant so ViewCube shows TOP, FRONT, LEFT in isometric
+        position = new THREE.Vector3(-distance * 0.7, distance * 0.7, distance * 0.7);
         break;
     }
 
@@ -563,6 +687,63 @@ export function useViewer(
     }
   }, []);
 
+  // Event listeners for app shell communication
+  useEffect(() => {
+    const handleReset = () => resetView();
+    const handleOrientation = (e: CustomEvent) => setOrientation(e.detail);
+    const handleCreateBaseplate = (e: CustomEvent) => {
+      const baseplateData = e.detail;
+      if (baseplateData.type === 'rectangular') {
+        createOrUpdateBaseplate(10, 10); // Default padding
+      } else if (baseplateData.type === 'convex-hull') {
+        createOrUpdateBaseplate(baseplateData.dimensions.padding || 20, 10);
+      } else if (baseplateData.type === 'cylindrical') {
+        createOrUpdateBaseplate(10, 10); // Use rectangular for now, TODO: implement cylindrical
+      } else if (baseplateData.type === 'v-block') {
+        createOrUpdateBaseplate(10, 10); // Use rectangular for now, TODO: implement v-block
+      } else if (baseplateData.type === 'hexagonal') {
+        createOrUpdateBaseplate(10, 10); // Use rectangular for now, TODO: implement hexagonal
+      } else if (baseplateData.type === 'perforated') {
+        createOrUpdateBaseplate(10, 10);
+        // TODO: Add perforated pattern to baseplate
+      } else if (baseplateData.type === 'solid') {
+        createOrUpdateBaseplate(10, 10);
+      }
+    };
+
+    window.addEventListener('viewer-reset', handleReset);
+    window.addEventListener('viewer-orientation', handleOrientation as EventListener);
+    const handleSetQuat = (e: CustomEvent<{ q: [number, number, number, number] }>) => {
+      if (!cameraRef.current || !controlsRef.current) return;
+      const [x, y, z, w] = e.detail.q;
+      const cam = cameraRef.current as THREE.Camera & { position: THREE.Vector3; quaternion: THREE.Quaternion };
+      const controls = controlsRef.current;
+      const target = controls.target.clone();
+
+      // Preserve distance from target
+      const offset = cam.position.clone().sub(target);
+      const distance = offset.length();
+
+      // Set rotation
+      cam.quaternion.set(x, y, z, w);
+
+      // Recompute position from target with same distance along new -Z camera axis
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion).normalize();
+      cam.position.copy(target.clone().sub(forward.multiplyScalar(distance)));
+
+      controls.update();
+    };
+    window.addEventListener('viewer-camera-set-quaternion', handleSetQuat as EventListener);
+    window.addEventListener('create-baseplate', handleCreateBaseplate as EventListener);
+
+    return () => {
+      window.removeEventListener('viewer-reset', handleReset);
+      window.removeEventListener('viewer-orientation', handleOrientation as EventListener);
+      window.removeEventListener('viewer-camera-set-quaternion', handleSetQuat as EventListener);
+      window.removeEventListener('create-baseplate', handleCreateBaseplate as EventListener);
+    };
+  }, [resetView, setOrientation, createOrUpdateBaseplate]);
+
   const dispose = useCallback(() => {
     // Clean up meshes
     meshesRef.current.forEach(mesh => {
@@ -603,5 +784,6 @@ export function useViewer(
     dispose,
     isReady: isInitializedRef.current,
     createOrUpdateBaseplate,
+    clearBaseplate,
   };
 }

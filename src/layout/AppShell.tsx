@@ -1,14 +1,17 @@
-import { forwardRef, ReactNode } from "react";
+import React, { forwardRef, ReactNode, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
-import { 
-  Cpu, 
-  Upload, 
-  RotateCcw, 
+import MainViewer from "@/components/MainViewer";
+import BaseplateDialog from "@/components/BaseplateDialog";
+import { ProcessedFile } from "@/modules/FileImport/types";
+import {
+  Cpu,
+  Upload,
+  RotateCcw,
   Box,
   View,
   Layers,
@@ -19,7 +22,13 @@ import {
   Zap,
   Square,
   Circle,
-  Move3D
+  Move3D,
+  Wrench,
+  ChevronLeft,
+  ChevronRight,
+  Scale,
+  GitMerge,
+  Move
 } from "lucide-react";
 
 export interface AppShellHandle {
@@ -31,24 +40,30 @@ export interface AppShellHandle {
 interface AppShellProps {
   children: ReactNode;
   onLogout: () => void;
+  onToggleDesignMode?: () => void;
+  designMode?: boolean;
   isProcessing?: boolean;
   fileStats?: {
     name?: string;
     triangles?: number;
     size?: string;
   };
+  currentFile?: ProcessedFile | null;
 }
 
 const AppShell = forwardRef<AppShellHandle, AppShellProps>(
-  ({ children, onLogout, isProcessing = false, fileStats }, ref) => {
+  ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing = false, fileStats, currentFile }, ref) => {
+    const [isBaseplateDialogOpen, setIsBaseplateDialogOpen] = useState(false);
+    const [isFileImportCollapsed, setIsFileImportCollapsed] = useState(false);
+    const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
+
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.stl';
+      input.accept = '.stl,.obj,.glb,.gltf';
       input.onchange = (e) => {
         const file = (e.target as HTMLInputElement).files?.[0];
         if (file) {
-          // This will be handled by the FileImport component
           const event = new CustomEvent('filepicker-selected', { detail: file });
           window.dispatchEvent(event);
         }
@@ -64,6 +79,19 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const handleSetOrientation = (orientation: string) => {
       const event = new CustomEvent('viewer-orientation', { detail: orientation });
       window.dispatchEvent(event);
+    };
+
+    const handleToolSelect = (toolId: string) => {
+      switch (toolId) {
+        case 'import':
+          handleOpenFilePicker();
+          break;
+        case 'support':
+          setIsBaseplateDialogOpen(true);
+          break;
+        default:
+          console.log('Tool selected:', toolId);
+      }
     };
 
     // Expose methods via ref
@@ -112,6 +140,19 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Reset
               </Button>
+
+              {onToggleDesignMode && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onToggleDesignMode}
+                  className="tech-transition"
+                  disabled={isProcessing}
+                >
+                  <Wrench className="w-4 h-4 mr-2" />
+                  {designMode ? 'View Mode' : 'Design Mode'}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -226,60 +267,127 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
         {/* Main Content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* Left Vertical Toolbar */}
+          {/* Left Static Vertical Toolbar */}
           <aside className="w-14 border-r border-border/50 tech-glass flex flex-col justify-center">
-            <VerticalToolbar 
-              onToolSelect={(toolId) => {
-                if (toolId === 'import') {
-                  handleOpenFilePicker();
-                }
-              }}
-            />
+            <VerticalToolbar onToolSelect={handleToolSelect} />
+          </aside>
+
+          {/* Collapsible File Import Section */}
+          <aside className={`border-r border-border/50 tech-glass flex flex-col transition-all duration-300 ${isFileImportCollapsed ? 'w-12' : 'w-80'}`}>
+            {/* File Import Header */}
+            <div className="p-2 border-b border-border/50 flex items-center justify-between">
+              {!isFileImportCollapsed && (
+                <h3 className="font-tech font-semibold text-sm">File Import</h3>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const next = !isFileImportCollapsed;
+                  setIsFileImportCollapsed(next);
+                  // allow CSS transition to finish then notify viewer
+                  setTimeout(() => {
+                    window.dispatchEvent(new Event('resize'));
+                    window.dispatchEvent(new CustomEvent('viewer-resize'));
+                  }, 320);
+                }}
+                className="w-8 h-8 p-0 tech-transition hover:bg-primary/10 hover:text-primary"
+                title={isFileImportCollapsed ? 'Expand File Import' : 'Collapse File Import'}
+              >
+                {isFileImportCollapsed ? (
+                  <ChevronRight className="w-4 h-4" />
+                ) : (
+                  <ChevronLeft className="w-4 h-4" />
+                )}
+              </Button>
+            </div>
+
+            {/* File Import Content */}
+            {!isFileImportCollapsed && (
+              <div className="flex-1">
+                {/* File Import will be rendered here via children */}
+                {children && React.cloneElement(children as React.ReactElement, {
+                  isInCollapsiblePanel: true
+                })}
+              </div>
+            )}
           </aside>
 
           {/* Main Viewport */}
           <main className="flex-1 relative">
-            {children}
-            
+            {/* 3D Viewer */}
+            <MainViewer currentFile={currentFile} isProcessing={isProcessing} />
+
             {/* View Cube - Top Right */}
             <div className="absolute top-4 right-4 z-10">
-              <ViewCube 
+              <ViewCube
                 onViewChange={handleSetOrientation}
-                className="border border-border/50 rounded-md bg-card/80 backdrop-blur-sm"
+                className=""
+                size={150}
               />
             </div>
           </main>
 
           {/* Right Properties Panel */}
-          <aside className="w-64 border-l border-border/50 tech-glass flex flex-col">
-            {/* Properties Section */}
-            <div className="p-4 flex-1">
-              <h3 className="font-tech font-semibold text-sm mb-3">Properties</h3>
-              {fileStats ? (
-                <div className="space-y-2 text-xs font-tech">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">File:</span>
-                    <span>{fileStats.name}</span>
-                  </div>
-                  {fileStats.triangles && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Triangles:</span>
-                      <span>{fileStats.triangles.toLocaleString()}</span>
-                    </div>
-                  )}
-                  {fileStats.size && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Size:</span>
-                      <span>{fileStats.size}</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground font-tech">
-                  No file loaded
-                </p>
+          <aside className={`border-l border-border/50 tech-glass flex flex-col transition-all duration-300 ${isPropertiesCollapsed ? 'w-12' : 'w-64'}`}>
+            {/* Properties Header */}
+            <div className="p-2 border-b border-border/50 flex items-center justify-between">
+              {!isPropertiesCollapsed && (
+                <h3 className="font-tech font-semibold text-sm">Properties</h3>
               )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  const next = !isPropertiesCollapsed;
+                  setIsPropertiesCollapsed(next);
+                  setTimeout(() => {
+                    window.dispatchEvent(new Event('resize'));
+                    window.dispatchEvent(new CustomEvent('viewer-resize'));
+                  }, 320);
+                }}
+                className="w-8 h-8 p-0 tech-transition hover:bg-primary/10 hover:text-primary"
+                title={isPropertiesCollapsed ? 'Expand Properties' : 'Collapse Properties'}
+              >
+                {isPropertiesCollapsed ? (
+                  <ChevronLeft className="w-4 h-4" />
+                ) : (
+                  <ChevronRight className="w-4 h-4" />
+                )}
+              </Button>
             </div>
+
+            {/* Properties Content */}
+            {!isPropertiesCollapsed && (
+              <div className="p-4 flex-1">
+                {fileStats ? (
+                  <div className="space-y-2 text-xs font-tech">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">File:</span>
+                      <span className="truncate ml-2 max-w-[120px]" title={fileStats.name}>
+                        {fileStats.name}
+                      </span>
+                    </div>
+                    {fileStats.triangles && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Triangles:</span>
+                        <span>{fileStats.triangles.toLocaleString()}</span>
+                      </div>
+                    )}
+                    {fileStats.size && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Size:</span>
+                        <span>{fileStats.size}</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground font-tech">
+                    No file loaded
+                  </p>
+                )}
+              </div>
+            )}
           </aside>
         </div>
 
@@ -295,6 +403,23 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             <span>Powered by Three.js</span>
           </div>
         </footer>
+
+        {/* Baseplate Selection Dialog */}
+        <BaseplateDialog
+          isOpen={isBaseplateDialogOpen}
+          onOpenChange={setIsBaseplateDialogOpen}
+          onBaseplateSelect={(type, option) => {
+            // Dispatch to viewer to create/update baseplate around current model
+            window.dispatchEvent(new CustomEvent('create-baseplate', {
+              detail: {
+                type,
+                option,
+                dimensions: { padding: 10, height: 10 }
+              }
+            }));
+            setIsBaseplateDialogOpen(false);
+          }}
+        />
       </div>
     );
   }

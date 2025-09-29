@@ -19,9 +19,12 @@ const FileDropzone = ({ onFileSelected, isProcessing = false, className = "" }: 
 
     const files = Array.from(e.dataTransfer.files);
     const file = files[0];
-    
+
     if (file) {
+      console.log('File dropped:', file.name, 'Size:', file.size, 'Type:', file.type);
       onFileSelected(file);
+    } else {
+      console.log('No file dropped');
     }
   }, [onFileSelected]);
 
@@ -41,20 +44,27 @@ const FileDropzone = ({ onFileSelected, isProcessing = false, className = "" }: 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      console.log('File selected via input:', file.name, 'Size:', file.size, 'Type:', file.type);
       onFileSelected(file);
+    } else {
+      console.log('No file selected via input');
     }
     // Reset input value to allow selecting the same file again
     e.target.value = '';
   }, [onFileSelected]);
 
   const openFilePicker = useCallback(() => {
+    console.log('Opening file picker...');
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = SUPPORTED_FORMATS.join(',');
     input.onchange = (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
+        console.log('File picked via picker:', file.name, 'Size:', file.size, 'Type:', file.type);
         onFileSelected(file);
+      } else {
+        console.log('No file picked via picker');
       }
     };
     input.click();

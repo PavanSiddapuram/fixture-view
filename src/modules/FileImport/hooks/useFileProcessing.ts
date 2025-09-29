@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { ProcessedFile, FileMetadata, SUPPORTED_FORMATS } from '../types';
 
 interface UseFileProcessingReturn {
-  processFile: (file: File) => Promise<ProcessedFile>;
+  processFile: (file: File, units?: string) => Promise<ProcessedFile>;
   isProcessing: boolean;
   error: string | null;
   clearError: () => void;
@@ -16,6 +16,19 @@ export function useFileProcessing(): UseFileProcessingReturn {
   const clearError = useCallback(() => {
     setError(null);
   }, []);
+
+  const getUnitScale = (units: string): number => {
+    switch (units) {
+      case 'mm':
+        return 1; // Base unit is mm
+      case 'cm':
+        return 10; // 1 cm = 10 mm
+      case 'inch':
+        return 25.4; // 1 inch = 25.4 mm
+      default:
+        return 1;
+    }
+  };
 
   const validateFile = (file: File): void => {
     const extension = '.' + file.name.split('.').pop()?.toLowerCase();
@@ -143,7 +156,7 @@ export function useFileProcessing(): UseFileProcessingReturn {
     };
   };
 
-  const processFile = useCallback(async (file: File): Promise<ProcessedFile> => {
+  const processFile = useCallback(async (file: File, units: string = 'mm'): Promise<ProcessedFile> => {
     const startTime = performance.now();
     
     try {
@@ -168,6 +181,10 @@ export function useFileProcessing(): UseFileProcessingReturn {
           throw new Error(`Parser for ${extension} not yet implemented`);
       }
       
+      // Apply unit scaling
+      const scale = getUnitScale(units);
+      geometry.scale(scale, scale, scale);
+      
       // Ensure we have normals
       if (!geometry.attributes.normal) {
         geometry.computeVertexNormals();
@@ -180,21 +197,27 @@ export function useFileProcessing(): UseFileProcessingReturn {
         metalness: 0.0,
         flatShading: false,
       });
-      
+
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      
+
+      console.log('Mesh created successfully:');
+      console.log('- Geometry vertices:', geometry.attributes.position.count);
+      console.log('- Geometry faces:', geometry.attributes.position.count / 3);
+      console.log('- Material:', material);
+      console.log('- Mesh:', mesh);
+
       // Compute metadata
       const processingTime = performance.now() - startTime;
       const metadata = computeMetadata(geometry, file, processingTime);
-      
+
       return { mesh, metadata };
       
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
       setError(errorMessage);
-      throw err;
+      console.error('Error creating mesh:', err);
     } finally {
       setIsProcessing(false);
     }
