@@ -55,10 +55,10 @@ export function useDragDrop(): UseDragDropReturn {
       snapPoint,
       isSnapping: snapPoint !== null
     }));
-  }, [dragDropState.isDragging]);
+  }, []);
 
-  const endDrag = useCallback(() => {
-    if (!dragDropState.isDragging) return;
+  const endDrag = useCallback((): THREE.Vector3 | undefined => {
+    if (!dragDropState.isDragging) return undefined;
 
     // Place component at snap point or current position
     const finalPosition = dragDropState.snapPoint || dragDropState.dragOffset;
@@ -72,7 +72,7 @@ export function useDragDrop(): UseDragDropReturn {
     }));
 
     return finalPosition;
-  }, [dragDropState.isDragging, dragDropState.snapPoint, dragDropState.dragOffset]);
+  }, []);
 
   const cancelDrag = useCallback(() => {
     setDragDropState(prev => ({

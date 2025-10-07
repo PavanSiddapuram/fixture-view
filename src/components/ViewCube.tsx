@@ -11,7 +11,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene>();
   const rendererRef = useRef<THREE.WebGLRenderer>();
-  const cameraRef = useRef<THREE.PerspectiveCamera>();
+  const cameraRef = useRef<THREE.Camera>();
   const cubeRef = useRef<THREE.Group>();
   const [hoveredFace, setHoveredFace] = useState<string | null>(null);
   const edgeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
@@ -24,7 +24,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
 
     // Scene setup
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
+    const camera = new THREE.OrthographicCamera(-1.5, 1.5, 1.5, -1.5, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     
@@ -36,6 +36,21 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const cubeGroup = new THREE.Group();
     const geometry = new THREE.BoxGeometry(1, 1, 1);
 
+    // Create visible cube faces with white material
+    const faceMaterials = [
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide }), // Right
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide }), // Left
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide }), // Top
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide }), // Bottom
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide }), // Front
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.FrontSide })  // Back
+    ];
+
+    const visibleCube = new THREE.Mesh(geometry, faceMaterials);
+    visibleCube.scale.set(1.2, 1.2, 1.2); // Apply scaling to visible cube
+    visibleCube.position.y = -0.1; // Apply positioning to visible cube
+    cubeGroup.add(visibleCube);
+
     // Invisible interaction mesh with 6 materials to preserve face indices for raycasting
     const invisibleMats: THREE.Material[] = [0,1,2,3,4,5].map(() => new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -46,14 +61,23 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       side: THREE.FrontSide,
     }));
     const interactionCube = new THREE.Mesh(geometry, invisibleMats);
+    interactionCube.scale.set(1.2, 1.2, 1.2); // Match the visible cube scaling
+    interactionCube.position.y = -0.1; // Match the visible cube positioning
     cubeGroup.add(interactionCube);
 
     // Clean edges using EdgesGeometry (outer cube)
     const edges = new THREE.EdgesGeometry(geometry, 1);
     const edgeLines = new THREE.LineSegments(
       edges,
-      new THREE.LineBasicMaterial({ color: 0x4d4d4d, transparent: true, opacity: 1 })
+      new THREE.LineBasicMaterial({ 
+        color: 0x4d4d4d, 
+        transparent: true, 
+        opacity: 1,
+        linewidth: 3  // Make edges thicker
+      })
     );
+    edgeLines.scale.set(1.2, 1.2, 1.2); // Match cube scaling
+    edgeLines.position.y = -0.1; // Match cube positioning
     edgeLines.renderOrder = 1;
     cubeGroup.add(edgeLines);
     edgeMaterialRef.current = edgeLines.material as THREE.LineBasicMaterial;
@@ -63,26 +87,32 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const innerEdges = new THREE.EdgesGeometry(innerGeom, 1);
     const innerLines = new THREE.LineSegments(
       innerEdges,
-      new THREE.LineBasicMaterial({ color: 0x4d4d4d, transparent: true, opacity: 1 })
+      new THREE.LineBasicMaterial({ 
+        color: 0x4d4d4d, 
+        transparent: true, 
+        opacity: 1,
+        linewidth: 2  // Make inner edges slightly thinner
+      })
     );
     innerLines.scale.set(0.85, 0.85, 0.85);
+    innerLines.position.y = -0.1; // Match cube positioning
     innerLines.renderOrder = 0;
     cubeGroup.add(innerLines);
 
-    // Slightly enlarge the entire cube group for better visibility
-    cubeGroup.scale.set(1.2, 1.2, 1.2);
-    // Nudge cube a bit downward to avoid top arrow clipping
-    cubeGroup.position.y = -0.1;
+    // Slightly enlarge the entire cube group for better visibility - removed since we apply to individual cubes
+    // cubeGroup.scale.set(1.2, 1.2, 1.2);
+    // Nudge cube a bit downward to avoid top arrow clipping - removed since we apply to individual cubes
+    // cubeGroup.position.y = -0.1;
 
     // Add labels (uppercase) using canvas sprites
     const labelTexts = ['RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK'];
     const labelPositions = [
-      new THREE.Vector3(0.6, 0, 0),    // Right
-      new THREE.Vector3(-0.6, 0, 0),   // Left  
-      new THREE.Vector3(0, 0.6, 0),    // Top
-      new THREE.Vector3(0, -0.6, 0),   // Bottom
-      new THREE.Vector3(0, 0, 0.6),    // Front
-      new THREE.Vector3(0, 0, -0.6)    // Back
+      new THREE.Vector3(0.7, 0, 0),    // Right - moved further out
+      new THREE.Vector3(-0.7, 0, 0),   // Left - moved further out
+      new THREE.Vector3(0, 0.7, 0),    // Top - moved further out
+      new THREE.Vector3(0, -0.7, 0),   // Bottom - moved further out
+      new THREE.Vector3(0, 0, 0.7),    // Front - moved further out
+      new THREE.Vector3(0, 0, -0.7)    // Back - moved further out
     ];
     // All labels are rendered; depth testing hides back faces naturally
     
@@ -112,33 +142,35 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       });
       const sprite = new THREE.Sprite(spriteMaterial);
       sprite.position.copy(labelPositions[index]);
-      sprite.scale.set(0.38, 0.38, 1);
+      sprite.position.multiplyScalar(1.2); // Scale label positions to match cube scaling
+      sprite.position.y -= 0.1; // Apply cube positioning to labels
+      sprite.scale.set(0.32, 0.32, 1); // Slightly smaller scale for better fit
       sprite.renderOrder = 1000;
       sprite.frustumCulled = false;
       cubeGroup.add(sprite);
     });
 
-    // Add decorative top arcs similar to screenshot
-    const makeArc = (radius: number, start: number, end: number, segments = 32) => {
-      const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= segments; i++) {
-        const t = start + (end - start) * (i / segments);
-        const x = Math.cos(t) * radius;
-        const z = Math.sin(t) * radius;
-        pts.push(new THREE.Vector3(x, 0, z));
-      }
-      const geom = new THREE.BufferGeometry().setFromPoints(pts);
-      const mat = new THREE.LineBasicMaterial({ color: 0x9a9a9a, transparent: true, opacity: 0.8, depthTest: false });
-      const line = new THREE.Line(geom, mat);
-      line.renderOrder = 1000;
-      return line;
-    };
-    const arcLeft = makeArc(1.6, Math.PI * 0.65, Math.PI * 1.05);   // left side arc
-    const arcRight = makeArc(1.6, -Math.PI * 0.05, Math.PI * 0.35); // right side arc
-    arcLeft.position.y = 1.25;
-    arcRight.position.y = 1.25;
-    cubeGroup.add(arcLeft);
-    cubeGroup.add(arcRight);
+    // Remove decorative arcs - cleaner look without them
+    // const makeArc = (radius: number, start: number, end: number, segments = 32) => {
+    //   const pts: THREE.Vector3[] = [];
+    //   for (let i = 0; i <= segments; i++) {
+    //     const t = start + (end - start) * (i / segments);
+    //     const x = Math.cos(t) * radius;
+    //     const z = Math.sin(t) * radius;
+    //     pts.push(new THREE.Vector3(x, 0, z));
+    //   }
+    //   const geom = new THREE.BufferGeometry().setFromPoints(pts);
+    //   const mat = new THREE.LineBasicMaterial({ color: 0x666666, transparent: false, opacity: 1, depthTest: false });
+    //   const line = new THREE.Line(geom, mat);
+    //   line.renderOrder = 1000;
+    //   return line;
+    // };
+    // const arcLeft = makeArc(1.4, Math.PI * 0.7, Math.PI * 1.0);
+    // const arcRight = makeArc(1.4, -Math.PI * 0.1, Math.PI * 0.3);
+    // arcLeft.position.y = 1.1;
+    // arcRight.position.y = 1.1;
+    // cubeGroup.add(arcLeft);
+    // cubeGroup.add(arcRight);
 
     // Corner arrows as small triangles near corners (screen plane-ish)
     const arrowMat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
@@ -147,13 +179,14 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const addArrow = (id: string, pos: THREE.Vector3, rot: THREE.Euler) => {
       const m = new THREE.Mesh(tri, arrowMat);
       m.position.copy(pos);
+      m.position.y -= 0.1; // Apply cube positioning to arrows
       m.rotation.copy(rot);
       m.renderOrder = 999;
       cubeGroup.add(m);
       arrows.push({ mesh: m, id });
     };
     // Place arrows with a gap away from the cube on 4 sides
-    const gap = 1.25; // distance from center
+    const gap = 1.25 * 1.2; // distance from center, scaled to match cube
     addArrow('right', new THREE.Vector3(gap, 0, 0), new THREE.Euler(0, 0, -Math.PI / 2));   // +X
     addArrow('left', new THREE.Vector3(-gap, 0, 0), new THREE.Euler(0, 0, Math.PI / 2));   // -X
     addArrow('top', new THREE.Vector3(0, gap, 0), new THREE.Euler(0, 0, 0));               // +Y
@@ -161,7 +194,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     arrowMaterialRef.current = arrowMat;
 
     scene.add(cubeGroup);
-    camera.position.set(2, 2, 2);
+    camera.position.set(3, 3, 3);
     camera.lookAt(0, 0, 0);
 
     sceneRef.current = scene;
@@ -204,7 +237,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
           const faceNames = ['right', 'left', 'top', 'bottom', 'front', 'back'];
           setHoveredFace(faceNames[faceIndex || 0]);
           renderer.domElement.style.cursor = 'pointer';
-        } else {
+        } else {  
           setHoveredFace(null);
           renderer.domElement.style.cursor = 'default';
         }
@@ -347,7 +380,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        background: 'transparent',
+        background: 'transparent', // Transparent background
         borderRadius: '12px',
         overflow: 'hidden'
       }}

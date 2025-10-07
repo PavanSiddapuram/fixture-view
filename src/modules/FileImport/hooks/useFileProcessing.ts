@@ -133,18 +133,18 @@ export function useFileProcessing(): UseFileProcessingReturn {
     // Compute bounding box
     geometry.computeBoundingBox();
     const boundingBox = geometry.boundingBox!;
-    
+
     // Get dimensions and center
     const dimensions = new THREE.Vector3();
     boundingBox.getSize(dimensions);
-    
+
     const center = new THREE.Vector3();
     boundingBox.getCenter(center);
-    
+
     // Count triangles
     const positionAttribute = geometry.getAttribute('position');
     const triangles = positionAttribute.count / 3;
-    
+
     return {
       name: file.name,
       size: file.size,
@@ -189,13 +189,13 @@ export function useFileProcessing(): UseFileProcessingReturn {
       if (!geometry.attributes.normal) {
         geometry.computeVertexNormals();
       }
-      
+
       // Create material and mesh
       const material = new THREE.MeshStandardMaterial({
         color: 0xb0b0b0, // Neutral gray
         roughness: 0.6,
         metalness: 0.0,
-        flatShading: false,
+        side: THREE.DoubleSide, // Render both front and back faces
       });
 
       const mesh = new THREE.Mesh(geometry, material);

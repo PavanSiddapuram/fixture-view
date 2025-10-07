@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
-import R3FViewer from "@/components/R3FViewer";
+import MainViewer from "@/components/MainViewer";
 import BaseplateDialog from "@/components/BaseplateDialog";
 import { ProcessedFile } from "@/modules/FileImport/types";
 import {
@@ -57,6 +57,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [isBaseplateDialogOpen, setIsBaseplateDialogOpen] = useState(false);
     const [isFileImportCollapsed, setIsFileImportCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
+    const [activeTool, setActiveTool] = useState<string | null>(null);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
 
@@ -78,7 +79,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const event = new CustomEvent('viewer-reset');
       window.dispatchEvent(event);
     };
-
     const handleSetOrientation = (orientation: string) => {
       const event = new CustomEvent('viewer-orientation', { detail: orientation });
       window.dispatchEvent(event);
@@ -89,23 +89,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
         const lastState = undoStack[undoStack.length - 1];
         setRedoStack(prev => [lastState, ...prev]);
         setUndoStack(prev => prev.slice(0, -1));
+        // Dispatch undo event
         window.dispatchEvent(new CustomEvent('viewer-undo', { detail: lastState }));
       }
-    };
-
-    const handleRedo = () => {
-      if (redoStack.length > 0) {
-        const nextState = redoStack[0];
-        setUndoStack(prev => [...prev, nextState]);
-        setRedoStack(prev => prev.slice(1));
-        window.dispatchEvent(new CustomEvent('viewer-redo', { detail: nextState }));
-      }
-    };
-
-    const handleComponentPlaced = (component: any, position: any) => {
-      const state = { component, position, timestamp: Date.now() };
-      setUndoStack(prev => [...prev, state]);
-      setRedoStack([]);
     };
 
     const handleToolSelect = (toolId: string) => {
@@ -122,25 +108,24 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       }
     };
 
-    // Listen for component placement to add to undo stack
-    React.useEffect(() => {
-      const handleComponentPlacedEvent = (e: CustomEvent) => {
-        const { component, position } = e.detail;
-        const state = { component, position, timestamp: Date.now() };
-        setUndoStack(prev => [...prev, state]);
-        setRedoStack([]);
-      };
-
-      window.addEventListener('component-placed', handleComponentPlacedEvent as EventListener);
-      return () => window.removeEventListener('component-placed', handleComponentPlacedEvent as EventListener);
-    }, []);
+    const handleRedo = () => {
+      if (redoStack.length > 0) {
+        const nextState = redoStack[0];
+        setUndoStack(prev => [...prev, nextState]);
+        setRedoStack(prev => prev.slice(1));
+        // Dispatch redo event
+        window.dispatchEvent(new CustomEvent('viewer-redo', { detail: nextState }));
+      }
+    };
 
     // Expose methods via ref
-    React.useImperativeHandle(ref, () => ({
-      openFilePicker: handleOpenFilePicker,
-      resetView: handleResetView,
-      setViewOrientation: handleSetOrientation,
-    }));
+    if (ref && typeof ref === 'object') {
+      ref.current = {
+        openFilePicker: handleOpenFilePicker,
+        resetView: handleResetView,
+        setViewOrientation: handleSetOrientation,
+      };
+    }
 
     return (
       <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -154,9 +139,9 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               </div>
               <span className="font-tech font-semibold text-sm">FixtureMate</span>
             </div>
-
+            
             <Separator orientation="vertical" className="h-6" />
-
+            
             <div className="flex items-center gap-2">
               <Button
                 variant="ghost"
@@ -168,7 +153,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 <Upload className="w-4 h-4 mr-2" />
                 Import
               </Button>
-
+              
               <Button
                 variant="ghost"
                 size="sm"
@@ -179,6 +164,19 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 <RotateCcw className="w-4 h-4 mr-2" />
                 Reset
               </Button>
+
+              {onToggleDesignMode && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onToggleDesignMode}
+                  className="tech-transition"
+                  disabled={isProcessing}
+                >
+                  <Wrench className="w-4 h-4 mr-2" />
+                  {designMode ? 'View Mode' : 'Design Mode'}
+                </Button>
+              )}
 
               <Separator orientation="vertical" className="h-6" />
 
@@ -211,6 +209,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 variant="ghost"
                 size="sm"
                 onClick={() => {
+                  // Toggle transform mode for model manipulation
                   window.dispatchEvent(new CustomEvent('toggle-transform-mode'));
                 }}
                 className="tech-transition"
@@ -219,7 +218,6 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 <Move className="w-4 h-4 mr-2" />
                 Transform
               </Button>
-            </div>
           </div>
 
           {/* Center Section - File Info */}
@@ -240,14 +238,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 )}
               </div>
             )}
-
+            
             {isProcessing && (
               <div className="flex items-center gap-2 text-xs font-tech text-primary">
                 <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin-smooth" />
                 <span className="text-primary">Processing...</span>
               </div>
             )}
-          </div>
 
           {/* Right Section - View Controls & User */}
           <div className="flex items-center gap-4">
@@ -313,9 +310,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 <Move3D className="w-4 h-4" />
               </Button>
             </div>
-
+            
+            
             <Separator orientation="vertical" className="h-6" />
-
+            
             <div className="flex items-center gap-2">
               <ThemeToggle />
               <Button
@@ -339,6 +337,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
           {/* Collapsible File Import Section */}
           <aside className={`border-r border-border/50 tech-glass flex flex-col transition-all duration-300 ${isFileImportCollapsed ? 'w-12' : 'w-80'}`}>
+            {/* File Import Header */}
             <div className="p-2 border-b border-border/50 flex items-center justify-between">
               {!isFileImportCollapsed && (
                 <h3 className="font-tech font-semibold text-sm">File Import</h3>
@@ -349,6 +348,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 onClick={() => {
                   const next = !isFileImportCollapsed;
                   setIsFileImportCollapsed(next);
+                  // allow CSS transition to finish then notify viewer
                   setTimeout(() => {
                     window.dispatchEvent(new Event('resize'));
                     window.dispatchEvent(new CustomEvent('viewer-resize'));
@@ -365,8 +365,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               </Button>
             </div>
 
+            {/* File Import Content */}
             {!isFileImportCollapsed && (
               <div className="flex-1">
+                {/* File Import will be rendered here via children */}
                 {children && React.cloneElement(children as React.ReactElement, {
                   isInCollapsiblePanel: true
                 })}
@@ -376,8 +378,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
           {/* Main Viewport */}
           <main className="flex-1 relative">
-            <R3FViewer currentFile={currentFile} isProcessing={isProcessing} onComponentPlaced={handleComponentPlaced} />
+            {/* 3D Viewer */}
+            <MainViewer currentFile={currentFile} isProcessing={isProcessing} />
 
+            {/* View Cube - Top Right */}
             <div className="absolute top-4 right-4 z-10">
               <ViewCube
                 onViewChange={handleSetOrientation}
@@ -389,6 +393,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
           {/* Right Properties Panel */}
           <aside className={`border-l border-border/50 tech-glass flex flex-col transition-all duration-300 ${isPropertiesCollapsed ? 'w-12' : 'w-64'}`}>
+            {/* Properties Header */}
             <div className="p-2 border-b border-border/50 flex items-center justify-between">
               {!isPropertiesCollapsed && (
                 <h3 className="font-tech font-semibold text-sm">Properties</h3>
@@ -415,6 +420,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
               </Button>
             </div>
 
+            {/* Properties Content */}
             {!isPropertiesCollapsed && (
               <div className="p-4 flex-1">
                 {fileStats ? (
@@ -466,6 +472,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           isOpen={isBaseplateDialogOpen}
           onOpenChange={setIsBaseplateDialogOpen}
           onBaseplateSelect={(type, option) => {
+            // Dispatch to viewer to create/update baseplate around current model
             window.dispatchEvent(new CustomEvent('create-baseplate', {
               detail: {
                 type,

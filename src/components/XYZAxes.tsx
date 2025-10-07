@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
 import * as THREE from 'three';
 
 interface XYZAxesProps {
@@ -7,6 +7,40 @@ interface XYZAxesProps {
 
 const XYZAxes: React.FC<XYZAxesProps> = ({ className = '' }) => {
   const mountRef = useRef<HTMLDivElement>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const axesGroupRef = useRef<THREE.Group | null>(null);
+  const [cameraQuaternion, setCameraQuaternion] = useState<[number, number, number, number]>([0, 0, 0, 1]);
+
+  // Memoize textures to prevent recreation
+  const textures = useMemo(() => {
+    const labels = [
+      { text: 'X', color: 0xff0000 },
+      { text: 'Y', color: 0x00ff00 },
+      { text: 'Z', color: 0x0000ff }
+    ];
+
+    return labels.map((label) => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d')!;
+      canvas.width = 64;
+      canvas.height = 64;
+
+      context.fillStyle = `#${label.color.toString(16).padStart(6, '0')}`;
+      context.font = 'bold 32px system-ui';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(label.text, 32, 32);
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+
+      return { texture, label };
+    });
+  }, []);
 
   useEffect(() => {
     if (!mountRef.current) return;
@@ -15,14 +49,20 @@ const XYZAxes: React.FC<XYZAxesProps> = ({ className = '' }) => {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    
+
     renderer.setSize(80, 80);
     renderer.setClearColor(0x000000, 0);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // Limit pixel ratio for performance
     mountRef.current.appendChild(renderer.domElement);
+
+    // Store references
+    rendererRef.current = renderer;
+    sceneRef.current = scene;
+    cameraRef.current = camera;
 
     // Create axes
     const axesGroup = new THREE.Group();
-    
+
     // X Axis (Red)
     const xGeometry = new THREE.CylinderGeometry(0.02, 0.02, 2, 8);
     const xMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
@@ -66,58 +106,70 @@ const XYZAxes: React.FC<XYZAxesProps> = ({ className = '' }) => {
     zArrow.position.z = 2.1;
     axesGroup.add(zArrow);
 
-    // Add labels using canvas sprites
-    const labels = [
-      { text: 'X', position: new THREE.Vector3(2.4, 0, 0), color: 0xff0000 },
-      { text: 'Y', position: new THREE.Vector3(0, 2.4, 0), color: 0x00ff00 },
-      { text: 'Z', position: new THREE.Vector3(0, 0, 2.4), color: 0x0000ff }
-    ];
-
-    labels.forEach((label) => {
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d')!;
-      canvas.width = 64;
-      canvas.height = 64;
-      
-      context.fillStyle = `#${label.color.toString(16).padStart(6, '0')}`;
-      context.font = 'bold 32px system-ui';
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText(label.text, 32, 32);
-      
-      const texture = new THREE.CanvasTexture(canvas);
-      const spriteMaterial = new THREE.SpriteMaterial({ 
-        map: texture, 
+    // Add labels using pre-created textures
+    textures.forEach(({ texture, label }, index) => {
+      const spriteMaterial = new THREE.SpriteMaterial({
+        map: texture,
         transparent: true
       });
       const sprite = new THREE.Sprite(spriteMaterial);
-      sprite.position.copy(label.position);
+
+      // Position labels
+      if (index === 0) sprite.position.set(2.4, 0, 0);      // X
+      else if (index === 1) sprite.position.set(0, 2.4, 0); // Y
+      else sprite.position.set(0, 0, 2.4);                 // Z
+
       sprite.scale.set(0.4, 0.4, 1);
       axesGroup.add(sprite);
     });
 
     scene.add(axesGroup);
-    camera.position.set(3, 3, 3);
-    camera.lookAt(0, 0, 0);
+    axesGroupRef.current = axesGroup;
 
-    // Animation loop
+    // Listen for camera changes from main viewer
+    const handleCameraChange = (e: CustomEvent) => {
+      const { q } = e.detail;
+      if (q && Array.isArray(q)) {
+        setCameraQuaternion(q as [number, number, number, number]);
+      }
+    };
+
+    // Animation loop with camera synchronization
     const animate = () => {
       requestAnimationFrame(animate);
-      renderer.render(scene, camera);
+
+      if (camera && cameraQuaternion) {
+        // Apply camera rotation from main viewer
+        camera.quaternion.set(cameraQuaternion[0], cameraQuaternion[1], cameraQuaternion[2], cameraQuaternion[3]);
+        camera.quaternion.normalize();
+
+        // Keep camera at fixed position relative to axes
+        camera.position.set(3, 3, 3);
+        camera.lookAt(0, 0, 0);
+
+        renderer.render(scene, camera);
+      }
     };
     animate();
 
     return () => {
-      mountRef.current?.removeChild(renderer.domElement);
+      window.removeEventListener('viewer-camera-changed', handleCameraChange as EventListener);
+      if (mountRef.current && renderer.domElement && mountRef.current.contains(renderer.domElement)) {
+        mountRef.current.removeChild(renderer.domElement);
+      }
       renderer.dispose();
+
+      // Dispose textures
+      textures.forEach(({ texture }) => {
+        texture.dispose();
+      });
     };
-  }, []);
+  }, [cameraQuaternion, textures]);
 
   return (
-    <div 
-      ref={mountRef} 
+    <div
+      ref={mountRef}
       className={`xyz-axes ${className}`}
-      style={{ width: '80px', height: '80px' }}
     />
   );
 };
