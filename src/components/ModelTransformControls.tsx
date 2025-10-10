@@ -10,6 +10,8 @@ interface ModelTransformControlsProps {
   snapToGrid?: boolean;
   gridSize?: number;
   enabled?: boolean;
+  modelRef?: React.RefObject<THREE.Mesh>;
+  transformMode?: 'translate' | 'rotate' | 'scale';
 }
 
 const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
@@ -18,11 +20,12 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
   onTransform,
   snapToGrid = true,
   gridSize = 5,
-  enabled = true
+  enabled = true,
+  modelRef,
+  transformMode = 'translate'
 }) => {
   const transformRef = useRef<any>(null);
   const { camera, gl } = useThree();
-  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('translate');
   const lastTransformRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null);
 
   // Use frame loop to detect transform changes
@@ -34,13 +37,12 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
         rotation: transformControls.rotation.clone(),
         scale: transformControls.scale.clone()
       };
-
       // Only call onTransform if transform has actually changed
       const lastTransform = lastTransformRef.current;
       if (!lastTransform ||
-          !currentTransform.position.equals(lastTransform.position) ||
-          !currentTransform.rotation.equals(lastTransform.rotation) ||
-          !currentTransform.scale.equals(lastTransform.scale)) {
+          !currentTransform.position.equals(lastTransform?.position) ||
+          !currentTransform.rotation.equals(lastTransform?.rotation) ||
+          !currentTransform.scale.equals(lastTransform?.scale)) {
 
         lastTransformRef.current = currentTransform;
 
@@ -54,61 +56,74 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
     }
   });
 
-  // Handle mode changes
-  const handleModeChange = useCallback((mode: 'translate' | 'rotate' | 'scale') => {
-    setTransformMode(mode);
-  }, []);
+  // Handle model ref changes and mode updates
+  React.useEffect(() => {
+    if (transformRef.current && enabled && modelRef?.current) {
+      try {
+        // Detach first to avoid conflicts
+        if (transformRef.current.object) {
+          transformRef.current.detach();
+        }
+
+        transformRef.current.setMode(transformMode);
+        transformRef.current.attach(modelRef.current);
+
+        // Force update to ensure gizmos are visible
+        transformRef.current.updateMatrixWorld(true);
+      } catch (error) {
+        console.error('Error updating transform controls:', error);
+      }
+    }
+  }, [modelRef?.current, enabled, transformMode]);
+
+  // Early return if not enabled or no model ref
+  if (!enabled || !modelRef?.current) {
+    return null;
+  }
+
+  // Calculate appropriate gizmo size based on model dimensions
+  const modelBoundingBox = new THREE.Box3().setFromObject(modelRef.current);
+  const modelSize = modelBoundingBox.getSize(new THREE.Vector3());
+  const maxDimension = Math.max(modelSize.x, modelSize.y, modelSize.z);
+  const gizmoSize = Math.max(0.3, Math.min(1.0, maxDimension * 0.15)); // Scale between 0.3 and 1.0
+
+  // Get model center for proper gizmo positioning
+  const modelCenter = modelBoundingBox.getCenter(new THREE.Vector3());
 
   return (
     <>
-      {enabled && (
-        <TransformControls
-          ref={transformRef}
-          position={position}
-          mode={transformMode}
-          onMouseDown={() => {
-            gl.domElement.style.cursor = 'grab';
-          }}
-          onMouseUp={() => {
-            gl.domElement.style.cursor = 'auto';
-          }}
-          showX
-          showY
-          showZ
-          size={1}
-        >
-          {/* Render the model inside TransformControls as a child */}
-          <mesh
-            position={[0, 0, 0]}
-            geometry={model.geometry}
-            material={model.material}
-          />
-        </TransformControls>
-      )}
+      <TransformControls
+        ref={transformRef}
+        object={modelRef.current}
+        mode={transformMode}
+        onMouseDown={() => {
+          gl.domElement.style.cursor = 'grab';
+          // Disable orbit controls when transform controls are active
+          window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
+        }}
+        onMouseUp={() => {
+          gl.domElement.style.cursor = 'auto';
+          // Re-enable orbit controls when transform controls are released
+          window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: false } }));
+        }}
+        onChange={() => {
+          // Update model transform state when controls change
+          if (transformRef.current && onTransform && model) {
+            const currentTransform = {
+              position: transformRef.current.position.clone(),
+              rotation: transformRef.current.rotation.clone(),
+              scale: transformRef.current.scale.clone()
+            };
+            onTransform(currentTransform);
+          }
+        }}
+        showX
+        showY
+        showZ
+        size={gizmoSize}  // Dynamic size based on model dimensions
+        position={modelCenter}  // Position at model center for better visibility
+      />
 
-      {/* Transform Mode Controls */}
-      <Html position={[position.x, position.y + 2, position.z]}>
-        <div className="flex gap-1 bg-black/80 text-white text-xs p-2 rounded">
-          <button
-            className={`px-2 py-1 rounded ${transformMode === 'translate' ? 'bg-blue-500' : 'bg-gray-600'}`}
-            onClick={() => handleModeChange('translate')}
-          >
-            Move
-          </button>
-          <button
-            className={`px-2 py-1 rounded ${transformMode === 'rotate' ? 'bg-blue-500' : 'bg-gray-600'}`}
-            onClick={() => handleModeChange('rotate')}
-          >
-            Rotate
-          </button>
-          <button
-            className={`px-2 py-1 rounded ${transformMode === 'scale' ? 'bg-blue-500' : 'bg-gray-600'}`}
-            onClick={() => handleModeChange('scale')}
-          >
-            Scale
-          </button>
-        </div>
-      </Html>
     </>
   );
 };

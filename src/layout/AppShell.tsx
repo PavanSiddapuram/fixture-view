@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import ViewCube from "@/components/ViewCube";
 import VerticalToolbar from "@/components/VerticalToolbar";
-import R3FViewer from "@/components/R3FViewer";
+import ThreeDViewer from "@/components/3DViewer";
 import BaseplateDialog from "@/components/BaseplateDialog";
 import { ProcessedFile } from "@/modules/FileImport/types";
 import {
@@ -59,6 +59,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
+    const [transformEnabled, setTransformEnabled] = useState(false);
 
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
@@ -376,7 +377,13 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
 
           {/* Main Viewport */}
           <main className="flex-1 relative">
-            <R3FViewer currentFile={currentFile} isProcessing={isProcessing} onComponentPlaced={handleComponentPlaced} />
+            <ThreeDViewer
+              currentFile={currentFile}
+              isProcessing={isProcessing}
+              onComponentPlaced={handleComponentPlaced}
+              transformEnabled={transformEnabled}
+              onTransformToggle={setTransformEnabled}
+            />
 
             <div className="absolute top-4 right-4 z-10">
               <ViewCube
