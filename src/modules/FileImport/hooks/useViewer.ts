@@ -210,18 +210,23 @@ export function useViewer(
     }
     cameraRef.current = camera;
 
-    // Renderer
-    const renderer = new THREE.WebGLRenderer({ 
-      antialias: config.antialias,
-      alpha: true 
+    // Create main renderer with optimized settings for better WebGL context management
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+      failIfMajorPerformanceCaveat: false,
+      stencil: false,
+      depth: true
     });
     renderer.setSize(rect.width, rect.height);
-    renderer.setPixelRatio(config.pixelRatio);
+    renderer.setPixelRatio(window.devicePixelRatio || 1);
+    renderer.setClearColor(0x000000, 1);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1;
-    renderer.autoClear = true; // let renderer handle color clears; we'll only clear depth for overlay HUD
     rendererRef.current = renderer;
 
     // Controls
@@ -263,30 +268,30 @@ export function useViewer(
       gridHelperRef.current = gridHelper;
     }
 
-    // Overlay scene/camera + dedicated transparent renderer for bottom-left axes
-    const overlayScene = new THREE.Scene();
-    const overlayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
-    overlayCam.position.set(0, 0, 2);
-    overlayCam.lookAt(0, 0, 0);
-    const overlayAxes = createViewerAxes();
-    overlayAxes.scale.setScalar(0.65);
-    overlayAxes.visible = true;
-    overlayAxes.traverse((obj) => {
-      const mat = (obj as THREE.Mesh).material as any;
-      if (mat && mat.depthTest !== undefined) mat.depthTest = false;
-      (obj as any).renderOrder = 999;
-    });
-    overlayScene.add(overlayAxes);
-    overlaySceneRef.current = overlayScene;
-    overlayCameraRef.current = overlayCam;
-    viewerAxesRef.current = overlayAxes;
+    // Overlay scene/camera + dedicated transparent renderer for bottom-left axes - DISABLED (using 3DScene.tsx axes instead)
+    // const overlayScene = new THREE.Scene();
+    // const overlayCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    // overlayCam.position.set(0, 0, 2);
+    // overlayCam.lookAt(0, 0, 0);
+    // const overlayAxes = createViewerAxes();
+    // overlayAxes.scale.setScalar(0.65);
+    // overlayAxes.visible = true;
+    // overlayAxes.traverse((obj) => {
+    //   const mat = (obj as THREE.Mesh).material as any;
+    //   if (mat && mat.depthTest !== undefined) mat.depthTest = false;
+    //   (obj as any).renderOrder = 999;
+    // });
+    // overlayScene.add(overlayAxes);
+    // overlaySceneRef.current = overlayScene;
+    // overlayCameraRef.current = overlayCam;
+    // viewerAxesRef.current = overlayAxes;
 
-    // Create a second transparent renderer just for the axes HUD
-    const overlayRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    overlayRenderer.setSize(112, 112);
-    overlayRenderer.setPixelRatio(config.pixelRatio);
-    overlayRenderer.setClearColor(0x000000, 0); // fully transparent
-    overlayRendererRef.current = overlayRenderer;
+    // Create a second transparent renderer just for the axes HUD - DISABLED
+    // const overlayRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // overlayRenderer.setSize(112, 112);
+    // overlayRenderer.setPixelRatio(config.pixelRatio);
+    // overlayRenderer.setClearColor(0x000000, 0); // fully transparent
+    // overlayRendererRef.current = overlayRenderer;
 
     // Large center X/Y axes (pre-import visual)
     { updateCenterCrossLength(100); }
@@ -300,17 +305,17 @@ export function useViewer(
 
     // Add to container
     container.appendChild(renderer.domElement);
-    // Position the overlay axes canvas bottom-left on top of main canvas
-    const hud = overlayRenderer.domElement;
-    hud.style.position = 'absolute';
-    hud.style.left = '8px';
-    hud.style.bottom = '8px';
-    hud.style.width = '112px';
-    hud.style.height = '112px';
-    hud.style.pointerEvents = 'none';
-    hud.style.background = 'transparent';
-    hud.style.backgroundColor = 'transparent';
-    container.appendChild(hud);
+    // Position the overlay axes canvas bottom-left on top of main canvas - DISABLED
+    // const hud = overlayRenderer.domElement;
+    // hud.style.position = 'absolute';
+    // hud.style.left = '8px';
+    // hud.style.bottom = '8px';
+    // hud.style.width = '112px';
+    // hud.style.height = '112px';
+    // hud.style.pointerEvents = 'none';
+    // hud.style.background = 'transparent';
+    // hud.style.backgroundColor = 'transparent';
+    // container.appendChild(hud);
     console.log('Renderer added to container. DOM element:', renderer.domElement);
 
     // Test render
@@ -328,11 +333,11 @@ export function useViewer(
       // Render main scene
       renderer.render(scene, camera);
 
-      // Render overlay axes using dedicated transparent renderer
-      if (overlayRendererRef.current && overlaySceneRef.current && overlayCameraRef.current && viewerAxesRef.current && cameraRef.current) {
-        viewerAxesRef.current.quaternion.copy((cameraRef.current as any).quaternion);
-        overlayRendererRef.current.render(overlaySceneRef.current, overlayCameraRef.current);
-      }
+      // Render overlay axes using dedicated transparent renderer - DISABLED (using 3DScene.tsx axes)
+      // if (overlayRendererRef.current && overlaySceneRef.current && overlayCameraRef.current && viewerAxesRef.current && cameraRef.current) {
+      //   viewerAxesRef.current.quaternion.copy((cameraRef.current as any).quaternion);
+      //   overlayRendererRef.current.render(overlaySceneRef.current, overlayCameraRef.current);
+      // }
 
       // Broadcast camera quaternion so ViewCube can follow
       const q = (camera as THREE.Camera as any).quaternion as THREE.Quaternion;
@@ -757,6 +762,51 @@ export function useViewer(
       }
     });
     meshesRef.current = [];
+
+    // Clean up baseplate and ground
+    if (baseplateRef.current) {
+      if (baseplateRef.current.geometry) baseplateRef.current.geometry.dispose();
+      if (baseplateRef.current.material) {
+        if (Array.isArray(baseplateRef.current.material)) {
+          baseplateRef.current.material.forEach(m => m.dispose());
+        } else {
+          baseplateRef.current.material.dispose();
+        }
+      }
+      baseplateRef.current = null;
+    }
+
+    if (groundRef.current) {
+      if (groundRef.current.geometry) groundRef.current.geometry.dispose();
+      if (groundRef.current.material) {
+        if (Array.isArray(groundRef.current.material)) {
+          groundRef.current.material.forEach(m => m.dispose());
+        } else {
+          groundRef.current.material.dispose();
+        }
+      }
+      groundRef.current = null;
+    }
+
+    // Clean up grid and axes helpers
+    if (gridHelperRef.current) {
+      if (gridHelperRef.current.geometry) gridHelperRef.current.geometry.dispose();
+      if (gridHelperRef.current.material) gridHelperRef.current.material.dispose();
+      gridHelperRef.current = null;
+    }
+
+    if (axesHelperRef.current) {
+      if (axesHelperRef.current.geometry) axesHelperRef.current.geometry.dispose();
+      if (axesHelperRef.current.material) axesHelperRef.current.material.dispose();
+      axesHelperRef.current = null;
+    }
+
+    // Clean up center cross
+    if (centerCrossRef.current) {
+      if (centerCrossRef.current.geometry) (centerCrossRef.current.geometry as THREE.BufferGeometry).dispose();
+      if (centerCrossRef.current.material) (centerCrossRef.current.material as THREE.Material).dispose();
+      centerCrossRef.current = null;
+    }
 
     // Clean up Three.js objects
     if (animationIdRef.current) {

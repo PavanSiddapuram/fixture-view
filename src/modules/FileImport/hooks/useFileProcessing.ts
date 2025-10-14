@@ -129,7 +129,7 @@ export function useFileProcessing(): UseFileProcessingReturn {
     return geometry;
   };
 
-  const computeMetadata = (geometry: THREE.BufferGeometry, file: File, processingTime: number): FileMetadata => {
+  const computeMetadata = (geometry: THREE.BufferGeometry, file: File, processingTime: number, units: string): FileMetadata => {
     // Compute bounding box
     geometry.computeBoundingBox();
     const boundingBox = geometry.boundingBox!;
@@ -152,7 +152,8 @@ export function useFileProcessing(): UseFileProcessingReturn {
       boundingBox,
       dimensions,
       center,
-      processingTime
+      processingTime,
+      units
     };
   };
 
@@ -181,9 +182,10 @@ export function useFileProcessing(): UseFileProcessingReturn {
           throw new Error(`Parser for ${extension} not yet implemented`);
       }
       
-      // Apply unit scaling
-      const scale = getUnitScale(units);
-      geometry.scale(scale, scale, scale);
+      // Apply unit scaling - but keep models at their original scale for now
+      // We'll scale the grid and axes instead
+      // const scale = getUnitScale(units);
+      // geometry.scale(scale, scale, scale);
       
       // Ensure we have normals
       if (!geometry.attributes.normal) {
@@ -210,7 +212,7 @@ export function useFileProcessing(): UseFileProcessingReturn {
 
       // Compute metadata
       const processingTime = performance.now() - startTime;
-      const metadata = computeMetadata(geometry, file, processingTime);
+      const metadata = computeMetadata(geometry, file, processingTime, units);
 
       return { mesh, metadata };
       

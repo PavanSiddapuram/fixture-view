@@ -27,12 +27,16 @@ interface BaseplateDialogProps {
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   onBaseplateSelect: (type: string, option: string) => void;
+  currentBaseplate?: { id: string; type: string } | null;
+  onRemoveBaseplate?: (basePlateId: string) => void;
 }
 
 const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
   isOpen,
   onOpenChange,
-  onBaseplateSelect
+  onBaseplateSelect,
+  currentBaseplate,
+  onRemoveBaseplate
 }) => {
   const [selected3DType, setSelected3DType] = useState<string>('');
   const [selectedStandardType, setSelectedStandardType] = useState<string>('');
@@ -67,6 +71,40 @@ const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
         </DialogHeader>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+          {/* Current Baseplate Section */}
+          {currentBaseplate && (
+            <Card className="border-green-200 bg-green-50">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg flex items-center gap-2 text-green-700">
+                  <CheckCircle className="w-4 h-4" />
+                  Current Baseplate
+                </CardTitle>
+                <p className="text-sm text-green-600">
+                  Currently active in 3D scene
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-green-100 rounded-lg border border-green-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="secondary" className="bg-green-200 text-green-800">
+                      {currentBaseplate.type}
+                    </Badge>
+                    <span className="font-medium text-green-900">ID: {currentBaseplate.id}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onRemoveBaseplate?.(currentBaseplate.id)}
+                    className="w-full border-red-200 text-red-700 hover:bg-red-50"
+                  >
+                    <X className="w-4 h-4 mr-2" />
+                    Remove Current Baseplate
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* 3D-Printed Baseplates Section */}
           <Card>
             <CardHeader className="pb-3">
@@ -257,7 +295,12 @@ const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
         {/* Action Buttons */}
         <div className="flex justify-between items-center">
           <div className="flex gap-2">
-            {(selected3DType || selectedStandardType) && (
+            {currentBaseplate && (
+              <Badge variant="secondary" className="px-3 py-1 bg-green-100 text-green-800">
+                Current: {currentBaseplate.type}
+              </Badge>
+            )}
+            {(selected3DType || selectedStandardType) && !currentBaseplate && (
               <Badge variant="secondary" className="px-3 py-1">
                 {selected3DType && `3D: ${selected3DType}`}
                 {selected3DType && selectedStandardType && ' + '}
@@ -271,14 +314,49 @@ const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
               <X className="w-4 h-4 mr-2" />
               Cancel
             </Button>
-            <Button
-              onClick={handleClose}
-              disabled={!selected3DType && !selectedStandardType}
-              className="min-w-[100px]"
-            >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Apply
-            </Button>
+
+            {/* Remove current base plate */}
+            {currentBaseplate && (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  onRemoveBaseplate?.(currentBaseplate.id);
+                  handleClose();
+                }}
+                className="min-w-[140px]"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Remove Baseplate
+              </Button>
+            )}
+
+            {/* Apply new base plate selection */}
+            {((selected3DType || selectedStandardType) && !currentBaseplate) && (
+              <Button
+                onClick={handleClose}
+                disabled={!selected3DType && !selectedStandardType}
+                className="min-w-[100px]"
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Apply
+              </Button>
+            )}
+
+            {/* Replace current base plate */}
+            {((selected3DType || selectedStandardType) && currentBaseplate) && (
+              <Button
+                onClick={() => {
+                  if (currentBaseplate) {
+                    onRemoveBaseplate?.(currentBaseplate.id);
+                  }
+                  handleClose();
+                }}
+                className="min-w-[140px] bg-orange-600 hover:bg-orange-700"
+              >
+                <CheckCircle className="w-4 h-4 mr-2" />
+                Replace Baseplate
+              </Button>
+            )}
           </div>
         </div>
       </DialogContent>

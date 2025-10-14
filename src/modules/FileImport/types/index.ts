@@ -13,6 +13,7 @@ export interface FileMetadata {
   dimensions: THREE.Vector3;
   center: THREE.Vector3;
   processingTime: number;
+  units: string;
 }
 
 export interface ViewerConfig {

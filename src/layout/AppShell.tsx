@@ -60,6 +60,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
     const [transformEnabled, setTransformEnabled] = useState(false);
+    const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string } | null>(null);
 
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
@@ -109,6 +110,17 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       setRedoStack([]);
     };
 
+    const handleBaseplateCreated = (e: CustomEvent) => {
+      const { option } = e.detail;
+      const baseplateId = `baseplate-${Date.now()}`;
+      setCurrentBaseplate({ id: baseplateId, type: option });
+    };
+
+    const handleBaseplateRemoved = (basePlateId: string) => {
+      setCurrentBaseplate(null);
+      window.dispatchEvent(new CustomEvent('remove-baseplate', { detail: { basePlateId } }));
+    };
+
     const handleToolSelect = (toolId: string) => {
       console.log('Tool selected:', toolId);
       switch (toolId) {
@@ -123,17 +135,10 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       }
     };
 
-    // Listen for component placement to add to undo stack
+    // Listen for base plate events
     React.useEffect(() => {
-      const handleComponentPlacedEvent = (e: CustomEvent) => {
-        const { component, position } = e.detail;
-        const state = { component, position, timestamp: Date.now() };
-        setUndoStack(prev => [...prev, state]);
-        setRedoStack([]);
-      };
-
-      window.addEventListener('component-placed', handleComponentPlacedEvent as EventListener);
-      return () => window.removeEventListener('component-placed', handleComponentPlacedEvent as EventListener);
+      window.addEventListener('create-baseplate', handleBaseplateCreated as EventListener);
+      return () => window.removeEventListener('create-baseplate', handleBaseplateCreated as EventListener);
     }, []);
 
     // Expose methods via ref
@@ -482,6 +487,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             }));
             setIsBaseplateDialogOpen(false);
           }}
+          currentBaseplate={currentBaseplate}
+          onRemoveBaseplate={handleBaseplateRemoved}
         />
       </div>
     );

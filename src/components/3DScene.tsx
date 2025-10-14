@@ -14,6 +14,41 @@ interface ThreeDSceneProps {
   setModelTransform: (transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }) => void;
 }
 
+// Utility function for model colors
+const modelColorPalette = [
+  '#4ade80', // Green
+  '#f97316', // Orange
+  '#06b6d4', // Cyan
+  '#8b5cf6', // Purple
+  '#ec4899', // Pink
+  '#eab308', // Yellow
+  '#ef4444', // Red
+  '#22c55e', // Emerald
+  '#3b82f6', // Blue
+  '#f59e0b'  // Amber
+];
+
+function getModelColor(modelId: string, colorsMap: Map<string, string>): string {
+  if (colorsMap.has(modelId)) {
+    return colorsMap.get(modelId)!;
+  }
+
+  // Assign a new color from palette if not already assigned
+  const availableColors = modelColorPalette.filter(color =>
+    !Array.from(colorsMap.values()).includes(color)
+  );
+
+  if (availableColors.length === 0) {
+    // If all colors used, cycle back to first color
+    const assignedColors = Array.from(colorsMap.values());
+    const firstUnusedColor = modelColorPalette.find(color => !assignedColors.includes(color)) || modelColorPalette[0];
+    return firstUnusedColor;
+  }
+
+  const newColor = availableColors[0];
+  return newColor;
+}
+
 // Integrated XYZ axes component within React Three Fiber
 function XYZAxes3D() {
   const { camera, size } = useThree();
@@ -164,10 +199,41 @@ function CenterCross({ length = 100 }: { length?: number }) {
 }
 
 // Component for the main 3D model
-function ModelMesh({ file, meshRef, dimensions }: { file: ProcessedFile; meshRef?: React.RefObject<THREE.Mesh>; dimensions?: { x?: number; y?: number; z?: number } }) {
+function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap }: { file: ProcessedFile; meshRef?: React.RefObject<THREE.Mesh>; dimensions?: { x?: number; y?: number; z?: number }; colorsMap?: Map<string, string>; setColorsMap?: React.Dispatch<React.SetStateAction<Map<string, string>>> }) {
   const internalRef = useRef<THREE.Mesh>(null);
   const { camera, size } = useThree();
   const actualRef = meshRef || internalRef;
+
+  // Get model color
+  const modelId = file.metadata.name;
+  const modelColor = getModelColor(modelId, colorsMap || new Map());
+
+  // Assign color to model when it loads
+  React.useEffect(() => {
+    if (setColorsMap && colorsMap && !colorsMap.has(modelId)) {
+      const newColor = getModelColor(modelId, colorsMap);
+      setColorsMap(prev => new Map(prev.set(modelId, newColor)));
+    }
+  }, [modelId, setColorsMap, colorsMap]);
+
+  // Update material color when model loads
+  React.useEffect(() => {
+    if (actualRef.current && actualRef.current.material && modelColor) {
+      // Convert hex color to RGB values for Three.js
+      const hex = modelColor.replace('#', '');
+      const r = parseInt(hex.substr(0, 2), 16) / 255;
+      const g = parseInt(hex.substr(2, 2), 16) / 255;
+      const b = parseInt(hex.substr(4, 2), 16) / 255;
+
+      if (actualRef.current.material instanceof THREE.MeshStandardMaterial) {
+        actualRef.current.material.color.setRGB(r, g, b);
+        actualRef.current.material.needsUpdate = true;
+      } else if (actualRef.current.material instanceof THREE.MeshBasicMaterial) {
+        actualRef.current.material.color.setRGB(r, g, b);
+        actualRef.current.material.needsUpdate = true;
+      }
+    }
+  }, [modelColor]);
 
   // Center model at origin and fit to viewport
   React.useEffect(() => {
@@ -193,11 +259,11 @@ function ModelMesh({ file, meshRef, dimensions }: { file: ProcessedFile; meshRef
       const modelCenter = new THREE.Vector3(0, 0, 0); // Now at origin
       const finalDimensions = newBoundingBox.getSize(new THREE.Vector3());
 
-      // Calculate the bounding sphere radius
+      // Calculate the bounding sphere radius (no unit scaling needed here)
       const maxDimension = Math.max(finalDimensions.x, finalDimensions.y, finalDimensions.z);
       const sphereRadius = maxDimension / 2;
 
-      // Calculate optimal camera distance to fit model in viewport
+      // Calculate optimal camera distance to fit normalized model in viewport
       const viewportHeight = size.height;
       const viewportWidth = size.width;
 
@@ -205,16 +271,23 @@ function ModelMesh({ file, meshRef, dimensions }: { file: ProcessedFile; meshRef
       const fovRadians = ((camera as any).fov * Math.PI) / 180;
       const distance = sphereRadius / Math.sin(fovRadians / 2);
 
+      // Get model units for scaling grid and camera
+      const modelUnits = file.metadata.units;
+      const unitScale = modelUnits === 'mm' ? 1 : (modelUnits === 'cm' ? 10 : 25.4);
+
+      // Scale camera distance based on units to ensure consistent model size
+      const adjustedDistance = distance * unitScale;
+
       // Position camera to look at origin where model is now centered
       const direction = new THREE.Vector3(0, 0, 1);
-      camera.position.copy(direction.multiplyScalar(distance * 1.2));
+      camera.position.copy(direction.multiplyScalar(adjustedDistance * 1.2));
 
       // Look at the origin (0,0,0)
       camera.lookAt(0, 0, 0);
 
-      // Set appropriate near and far planes
-      const nearPlane = Math.max(distance * 0.01, 0.1);
-      const farPlane = distance * 100;
+      // Set appropriate near and far planes based on adjusted distance
+      const nearPlane = Math.max(adjustedDistance * 0.01, 0.1);
+      const farPlane = adjustedDistance * 100;
       camera.near = nearPlane;
       camera.far = farPlane;
 
@@ -274,17 +347,19 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placedComponents, setPlacedComponents] = useState<Array<{ component: any; position: THREE.Vector3; id: string }>>([]);
   const [selectedComponent, setSelectedComponent] = useState<any>(null);
   const [basePlate, setBasePlate] = useState<{
-    type: 'rectangular' | 'circular';
+    type: 'rectangular' | 'circular' | 'convex-hull' | 'cylindrical' | 'v-block' | 'hexagonal' | 'perforated-panel' | 'metal-wooden-plate';
     width?: number;
     height?: number;
     depth?: number;
     radius?: number;
     position?: THREE.Vector3;
     material?: 'metal' | 'wood' | 'plastic';
+    id?: string;
   } | null>(null);
   const modelMeshRef = useRef<THREE.Mesh>(null);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
+  const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
 
   // Handle mouse events for drag and drop (disabled for now)
   const handlePointerMove = useCallback((event: any) => {
@@ -294,6 +369,83 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const handlePointerUp = useCallback(() => {
     // Drag and drop functionality temporarily disabled
   }, []);
+
+  // Helper function to calculate optimal camera position for a model
+  const calculateCameraPosition = useCallback((modelMesh: THREE.Mesh, orientation: 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso' = 'front') => {
+    if (!modelMesh) return new THREE.Vector3(0, 0, 5);
+
+    const boundingBox = new THREE.Box3().setFromObject(modelMesh);
+    const modelSize = boundingBox.getSize(new THREE.Vector3());
+    const maxDimension = Math.max(modelSize.x, modelSize.y, modelSize.z);
+
+    // Apply unit scaling for consistent display size across different units
+    const modelUnits = currentFile?.metadata.units;
+    const unitScale = modelUnits === 'mm' ? 1 : (modelUnits === 'cm' ? 10 : 25.4);
+    const normalizedMaxDimension = maxDimension * unitScale;
+
+    // Calculate appropriate camera distance (1.5x the normalized model size for comfortable viewing)
+    const desiredDistance = normalizedMaxDimension * 1.5;
+
+    const center = boundingBox.getCenter(new THREE.Vector3());
+
+    switch (orientation) {
+      case 'front':
+        return center.clone().add(new THREE.Vector3(0, 0, desiredDistance));
+      case 'back':
+        return center.clone().add(new THREE.Vector3(0, 0, -desiredDistance));
+      case 'left':
+        return center.clone().add(new THREE.Vector3(-desiredDistance, 0, 0));
+      case 'right':
+        return center.clone().add(new THREE.Vector3(desiredDistance, 0, 0));
+      case 'top':
+        return center.clone().add(new THREE.Vector3(0, desiredDistance, 0));
+      case 'bottom':
+        return center.clone().add(new THREE.Vector3(0, -desiredDistance, 0));
+      case 'iso':
+        // Isometric view - 45 degrees from front and side
+        return center.clone().add(new THREE.Vector3(desiredDistance * 0.7, desiredDistance * 0.7, desiredDistance * 0.7));
+      default:
+        return center.clone().add(new THREE.Vector3(0, 0, desiredDistance));
+    }
+  }, [currentFile]);
+
+  // Helper function to determine optimal model orientation based on dimensions
+  const getOptimalModelOrientation = useCallback((mesh: THREE.Mesh) => {
+    const boundingBox = new THREE.Box3().setFromObject(mesh);
+    const dimensions = boundingBox.getSize(new THREE.Vector3());
+
+    // Find the face with the largest area (most stable base)
+    const faces = [
+      { axis: 'x', size: dimensions.x * dimensions.z, normal: new THREE.Vector3(0, 1, 0) }, // Bottom face (Y-up)
+      { axis: 'y', size: dimensions.x * dimensions.y, normal: new THREE.Vector3(0, 0, 1) }, // Front face (Z-up)
+      { axis: 'z', size: dimensions.y * dimensions.z, normal: new THREE.Vector3(1, 0, 0) }, // Side face (X-up)
+    ];
+
+    // Sort by area (largest first)
+    faces.sort((a, b) => b.size - a.size);
+
+    // Return the normal vector for the largest face (this should be pointing up)
+    return faces[0].normal;
+  }, []);
+
+  // Helper function to orient model so largest face is down
+  const orientModelForOptimalView = useCallback((mesh: THREE.Mesh) => {
+    const optimalUp = getOptimalModelOrientation(mesh);
+
+    // Create rotation matrix to align optimal face with Y-axis (up)
+    const currentUp = new THREE.Vector3(0, 1, 0);
+    const quaternion = new THREE.Quaternion().setFromUnitVectors(optimalUp, currentUp);
+
+    // Apply rotation to mesh
+    mesh.quaternion.multiply(quaternion);
+
+    // Update position after rotation (center at origin)
+    const boundingBox = new THREE.Box3().setFromObject(mesh);
+    const center = boundingBox.getCenter(new THREE.Vector3());
+    mesh.position.sub(center);
+
+    return mesh;
+  }, [getOptimalModelOrientation]);
 
   // Listen for component selection from library
   React.useEffect(() => {
@@ -309,20 +461,60 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handleCreateBaseplate = (e: CustomEvent) => {
       const { type, option, dimensions } = e.detail;
+      console.log('Creating baseplate:', type, option, dimensions);
 
-      // Base plate dimensions - centered at origin
+      // Generate unique ID for the base plate
+      const basePlateId = `baseplate-${Date.now()}`;
+
+      // Base plate dimensions - positioned under the model
       let basePlateConfig: typeof basePlate = {
-        type: type as 'rectangular' | 'circular',
-        position: new THREE.Vector3(0, -dimensions.height / 2, 0), // Centered at origin
-        material: option as 'metal' | 'wood' | 'plastic',
-        depth: dimensions.height
+        type: option as any,
+        position: new THREE.Vector3(0, -dimensions.height / 2, 0), // Start at origin, will be adjusted
+        material: dimensions.material || 'metal',
+        depth: dimensions.height || 10,
+        id: basePlateId
       };
 
-      if (type === 'rectangular') {
-        basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-        basePlateConfig.height = Math.max(dimensions.length || 100, 50);
-      } else {
-        basePlateConfig.radius = Math.max(dimensions.radius || 50, 25);
+      // Calculate proper baseplate position under the model
+      if (modelMeshRef.current) {
+        const modelBox = new THREE.Box3().setFromObject(modelMeshRef.current);
+        const modelBottom = modelBox.min.y;
+        basePlateConfig.position = new THREE.Vector3(0, modelBottom - dimensions.height / 2, 0);
+      }
+
+      // Set dimensions based on type and provided dimensions
+      switch (option) {
+        case 'rectangular':
+        case 'metal-wooden-plate':
+          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
+          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
+          break;
+
+        case 'circular':
+        case 'cylindrical':
+          basePlateConfig.radius = Math.max(dimensions.radius || 50, 25);
+          break;
+
+        case 'hexagonal':
+          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
+          basePlateConfig.height = Math.max(dimensions.height || 100, 50);
+          break;
+
+        case 'v-block':
+          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
+          basePlateConfig.height = Math.max(dimensions.height || 50, 25);
+          break;
+
+        case 'convex-hull':
+          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
+          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
+          // For convex hull, we'll need model geometry - handled in render
+          break;
+
+        case 'perforated-panel':
+          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
+          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
+          break;
       }
 
       setBasePlate(basePlateConfig);
@@ -330,7 +522,32 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
     window.addEventListener('create-baseplate', handleCreateBaseplate as EventListener);
     return () => window.removeEventListener('create-baseplate', handleCreateBaseplate as EventListener);
-  }, [selectedComponent]);
+  }, []);
+
+  // Handle base plate deselection/cancellation
+  React.useEffect(() => {
+    const handleDeselectBaseplate = (e: CustomEvent) => {
+      const { basePlateId } = e.detail;
+      console.log('Deselecting baseplate:', basePlateId);
+
+      if (basePlate && basePlate.id === basePlateId) {
+        setBasePlate(null);
+      }
+    };
+
+    const handleCancelBaseplate = () => {
+      console.log('Cancelling baseplate selection');
+      setBasePlate(null);
+    };
+
+    window.addEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
+    window.addEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
+
+    return () => {
+      window.removeEventListener('baseplate-deselected', handleDeselectBaseplate as EventListener);
+      window.removeEventListener('cancel-baseplate', handleCancelBaseplate as EventListener);
+    };
+  }, [basePlate]);
 
   // Handle transform mode toggle events
   React.useEffect(() => {
@@ -345,26 +562,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Auto-adjust camera when model loads
   React.useEffect(() => {
     if (currentFile && modelMeshRef.current) {
-      // Calculate model bounds
-      const boundingBox = new THREE.Box3().setFromObject(modelMeshRef.current);
-      const modelSize = boundingBox.getSize(new THREE.Vector3());
-      const maxDimension = Math.max(modelSize.x, modelSize.y, modelSize.z);
-
-      // Calculate appropriate camera distance (1.5x the model size for comfortable viewing)
-      const desiredDistance = maxDimension * 1.5;
-
-      // Position camera to frame the model nicely
-      const center = boundingBox.getCenter(new THREE.Vector3());
-      const direction = new THREE.Vector3(0, 0, 1); // Front view direction
-
-      // Position camera at a good distance from the model center
-      const newPosition = center.clone().add(direction.multiplyScalar(desiredDistance));
-
-      // Update camera position smoothly
+      const newPosition = calculateCameraPosition(modelMeshRef.current, 'iso');
       camera.position.copy(newPosition);
-      camera.lookAt(center);
+      camera.lookAt(modelMeshRef.current.position);
     }
-  }, [currentFile, camera]);
+  }, [currentFile, camera, calculateCameraPosition]);
 
   // Handle orbit controls enable/disable for transform mode
   React.useEffect(() => {
@@ -379,68 +581,85 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   // Handle view reset events
   React.useEffect(() => {
     const handleViewReset = (e: CustomEvent) => {
-      // Reset camera to default position (front view) looking at origin
-      camera.position.set(0, 0, 5);
-      camera.lookAt(0, 0, 0);
+      if (currentFile && modelMeshRef.current) {
+        // Reset camera to isometric view position based on model size and units
+        const newPosition = calculateCameraPosition(modelMeshRef.current, 'iso');
+        camera.position.copy(newPosition);
+        camera.lookAt(modelMeshRef.current.position);
+      } else {
+        // Reset camera to default isometric position (no model loaded)
+        camera.position.set(3.5, 3.5, 3.5);
+        camera.lookAt(0, 0, 0);
+      }
+
+      // Clear baseplate when resetting
+      setBasePlate(null);
     };
 
     window.addEventListener('viewer-reset', handleViewReset as EventListener);
     return () => window.removeEventListener('viewer-reset', handleViewReset as EventListener);
-  }, [camera]);
+  }, [camera, calculateCameraPosition, currentFile]);
 
   // Handle view orientation events
   React.useEffect(() => {
     const handleViewOrientation = (e: CustomEvent) => {
       const orientation = e.detail;
 
-      // Set camera position based on orientation
-      switch (orientation) {
-        case 'front':
-          camera.position.set(0, 0, 5);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'back':
-          camera.position.set(0, 0, -5);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'left':
-          camera.position.set(-5, 0, 0);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'right':
-          camera.position.set(5, 0, 0);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'top':
-          camera.position.set(0, 5, 0);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'bottom':
-          camera.position.set(0, -5, 0);
-          camera.lookAt(0, 0, 0);
-          break;
-        case 'iso':
-          // Isometric view - 45 degrees from front and side
-          camera.position.set(3.5, 3.5, 3.5);
-          camera.lookAt(0, 0, 0);
-          break;
-        default:
-          console.warn('Unknown orientation:', orientation);
+      if (currentFile && modelMeshRef.current) {
+        // Set camera position based on orientation and model size/units
+        const newPosition = calculateCameraPosition(modelMeshRef.current, orientation as any);
+        camera.position.copy(newPosition);
+        camera.lookAt(modelMeshRef.current.position);
+      } else {
+        // Fallback to fixed positions when no model is loaded
+        switch (orientation) {
+          case 'front':
+            camera.position.set(0, 0, 5);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'back':
+            camera.position.set(0, 0, -5);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'left':
+            camera.position.set(-5, 0, 0);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'right':
+            camera.position.set(5, 0, 0);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'top':
+            camera.position.set(0, 5, 0);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'bottom':
+            camera.position.set(0, -5, 0);
+            camera.lookAt(0, 0, 0);
+            break;
+          case 'iso':
+            // Isometric view - 45 degrees from front and side
+            camera.position.set(3.5, 3.5, 3.5);
+            camera.lookAt(0, 0, 0);
+            break;
+          default:
+            console.warn('Unknown orientation:', orientation);
+        }
       }
     };
 
     window.addEventListener('viewer-orientation', handleViewOrientation as EventListener);
     return () => window.removeEventListener('viewer-orientation', handleViewOrientation as EventListener);
-  }, [camera]);
+  }, [camera, calculateCameraPosition, currentFile]);
 
   // Handle clear/reset events
   React.useEffect(() => {
     const handleClear = (e: CustomEvent) => {
-      // Reset camera to default position
+      // Reset camera to default position (front view) looking at origin
       camera.position.set(0, 0, 5);
       camera.lookAt(0, 0, 0);
 
-      // Clear all state
+      // Clear all state including baseplate
       setPlacedComponents([]);
       setSelectedComponent(null);
       setBasePlate(null);
@@ -463,16 +682,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Environment */}
       <Environment preset="warehouse" />
 
-      {/* Grid - centered at origin */}
+      {/* Grid - centered at origin, scaled based on model units */}
       <Grid
         position={[0, -0.01, 0]}
-        cellSize={1}
+        cellSize={currentFile ? (currentFile.metadata.units === 'mm' ? 1 : (currentFile.metadata.units === 'cm' ? 10 : 25.4)) : 1}
         cellThickness={0.5}
         cellColor="#6f6f6f"
-        sectionSize={10}
+        sectionSize={currentFile ? (currentFile.metadata.units === 'mm' ? 10 : (currentFile.metadata.units === 'cm' ? 100 : 254)) : 10}
         sectionThickness={1}
         sectionColor="#9d4edd"
-        fadeDistance={30}
+        fadeDistance={currentFile ? 300 : 30}
         fadeStrength={1}
         followCamera={false}
         infiniteGrid={true}
@@ -482,9 +701,9 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       <ContactShadows
         position={[0, -0.01, 0]}
         opacity={0.4}
-        scale={20}
+        scale={currentFile ? (currentFile.metadata.units === 'mm' ? 20 : (currentFile.metadata.units === 'cm' ? 200 : 508)) : 20}
         blur={1}
-        far={10}
+        far={currentFile ? (currentFile.metadata.units === 'mm' ? 10 : (currentFile.metadata.units === 'cm' ? 100 : 254)) : 10}
         resolution={256}
         color="#000000"
       />
@@ -493,11 +712,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       <XYZAxes3D />
 
       {/* Center cross axes - larger for initial view, smaller when model is loaded */}
-      <CenterCross length={currentFile ? 30 : 100} />
+      <CenterCross length={currentFile ? (currentFile.metadata.units === 'mm' ? 30 : (currentFile.metadata.units === 'cm' ? 300 : 762)) : 100} />
 
       {/* Base plate */}
       {basePlate && (
         <BasePlate
+          key={`baseplate-${basePlate.id}`}
           type={basePlate.type}
           width={basePlate.width}
           height={basePlate.height}
@@ -505,13 +725,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           radius={basePlate.radius}
           position={basePlate.position}
           material={basePlate.material}
+          modelGeometry={basePlate.type === 'convex-hull' && modelMeshRef.current?.geometry ? modelMeshRef.current.geometry : undefined}
+          selected={false}
+          onSelect={() => {
+            // Dispatch event to select this base plate
+            window.dispatchEvent(new CustomEvent('baseplate-selected', {
+              detail: { basePlateId: basePlate.id }
+            }));
+          }}
         />
       )}
 
       {/* Main 3D model - show in both normal and transform modes */}
       {currentFile && (
         <group>
-          <ModelMesh file={currentFile} meshRef={modelMeshRef} dimensions={modelDimensions} />
+          <ModelMesh file={currentFile} meshRef={modelMeshRef} dimensions={modelDimensions} colorsMap={modelColors} setColorsMap={setModelColors} />
         </group>
       )}
 
