@@ -44,28 +44,43 @@ export function useFileProcessing(): UseFileProcessingReturn {
   };
 
   const parseSTL = async (arrayBuffer: ArrayBuffer): Promise<THREE.BufferGeometry> => {
-    const view = new DataView(arrayBuffer);
-    
-    // Check if it's binary STL (first 80 bytes are header, then 4-byte triangle count)
-    const isBinary = arrayBuffer.byteLength > 84;
-    
-    if (isBinary) {
-      return parseBinarySTL(arrayBuffer);
-    } else {
-      return parseASCIISTL(new TextDecoder().decode(arrayBuffer));
+    const byteLength = arrayBuffer.byteLength;
+
+    if (byteLength > 84) {
+      const view = new DataView(arrayBuffer);
+      const triangleCount = view.getUint32(80, true);
+      const expectedByteLength = 84 + triangleCount * 50;
+
+      const headerText = new TextDecoder().decode(new Uint8Array(arrayBuffer, 0, 80)).trim().toLowerCase();
+      const headerSuggestsASCII = headerText.startsWith('solid');
+
+      if (!headerSuggestsASCII && expectedByteLength <= byteLength && triangleCount > 0) {
+        return parseBinarySTL(arrayBuffer, triangleCount);
+      }
     }
+
+    return parseASCIISTL(new TextDecoder().decode(arrayBuffer));
   };
 
-  const parseBinarySTL = (arrayBuffer: ArrayBuffer): THREE.BufferGeometry => {
+  const parseBinarySTL = (arrayBuffer: ArrayBuffer, triangleCountFromHeader?: number): THREE.BufferGeometry => {
     const view = new DataView(arrayBuffer);
-    const triangleCount = view.getUint32(80, true);
-    
+    const triangleCount = triangleCountFromHeader ?? view.getUint32(80, true);
+    const expectedByteLength = 84 + triangleCount * 50;
+
+    if (expectedByteLength > arrayBuffer.byteLength) {
+      throw new Error('Binary STL data is incomplete or corrupted.');
+    }
+
     const vertices: number[] = [];
     const normals: number[] = [];
     
     let offset = 84; // Skip header (80 bytes) + triangle count (4 bytes)
     
     for (let i = 0; i < triangleCount; i++) {
+      if (offset + 50 > arrayBuffer.byteLength) {
+        throw new Error('Unexpected end of binary STL data while reading triangles.');
+      }
+
       // Normal vector (3 floats)
       const nx = view.getFloat32(offset, true);
       const ny = view.getFloat32(offset + 4, true);

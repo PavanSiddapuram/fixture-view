@@ -37,7 +37,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
       setInternalTransformEnabled(enabled);
     }
 
-    if (enabled) {
+    if (!enabled) {
       setCurrentTransformMode('translate');
     }
   };
@@ -51,6 +51,24 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
     rotation: new THREE.Euler(0, 0, 0),
     scale: new THREE.Vector3(1, 1, 1)
   });
+
+  const ensureTransformEnabled = useCallback(() => {
+    if (!transformEnabled) {
+      handleTransformToggle(true);
+    }
+  }, [transformEnabled, handleTransformToggle]);
+
+  const cycleTransformMode = useCallback(() => {
+    if (!transformEnabled) {
+      ensureTransformEnabled();
+      return;
+    }
+    setCurrentTransformMode(prev => {
+      const modes: Array<'translate' | 'rotate' | 'scale'> = ['translate', 'rotate', 'scale'];
+      const nextIndex = (modes.indexOf(prev) + 1) % modes.length;
+      return modes[nextIndex];
+    });
+  }, [transformEnabled, ensureTransformEnabled]);
 
   // Listen for external transform toggle events from header button
   const handleToggleTransform = useCallback(() => {
@@ -66,13 +84,13 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
   return (
     <div className="w-full h-full relative">
       <Canvas
+        orthographic
         camera={{
-          position: [3.5, 3.5, 3.5], // Isometric view by default
-          fov: 50,
+          position: [8, 8, 8], // Default isometric orthographic view
+          zoom: 38,
           near: 0.1,
-          far: 1000
+          far: 5000
         }}
-        shadows
         gl={{
           antialias: true,
           alpha: true,
@@ -86,6 +104,7 @@ const ThreeDViewer: React.FC<ThreeDViewerProps> = ({
           currentTransformMode={currentTransformMode}
           modelTransform={modelTransform}
           setModelTransform={setModelTransform}
+          onCycleTransformMode={cycleTransformMode}
         />
       </Canvas>
 

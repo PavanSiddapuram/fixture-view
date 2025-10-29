@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -28,6 +28,8 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
   const { camera, gl } = useThree();
   const lastTransformRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null);
   const gizmoPositionRef = useRef<THREE.Vector3>(new THREE.Vector3());
+  const rotationSnap = THREE.MathUtils.degToRad(5);
+  const translationSnap = useMemo(() => (snapToGrid ? gridSize : undefined), [snapToGrid, gridSize]);
 
   // Calculate optimal gizmo position on model surface
   const calculateOptimalGizmoPosition = useCallback((modelMesh: THREE.Mesh) => {
@@ -105,26 +107,25 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
 
   // Use frame loop to detect transform changes
   useFrame(() => {
-    if (transformRef.current && onTransform && model) {
-      const transformControls = transformRef.current;
+    if (transformRef.current && onTransform && modelRef?.current) {
       const currentTransform = {
-        position: transformControls.position.clone(),
-        rotation: transformControls.rotation.clone(),
-        scale: transformControls.scale.clone()
+        position: modelRef.current.position.clone(),
+        rotation: modelRef.current.rotation.clone(),
+        scale: modelRef.current.scale.clone(),
       };
-      // Only call onTransform if transform has actually changed
+
       const lastTransform = lastTransformRef.current;
-      if (!lastTransform ||
-          !currentTransform.position.equals(lastTransform?.position) ||
-          !currentTransform.rotation.equals(lastTransform?.rotation) ||
-          !currentTransform.scale.equals(lastTransform?.scale)) {
-
-        lastTransformRef.current = currentTransform;
-
-        // Apply transform to the model
-        model.position.copy(currentTransform.position);
-        model.rotation.copy(currentTransform.rotation);
-        model.scale.copy(currentTransform.scale);
+      if (
+        !lastTransform ||
+        !currentTransform.position.equals(lastTransform.position) ||
+        !currentTransform.rotation.equals(lastTransform.rotation) ||
+        !currentTransform.scale.equals(lastTransform.scale)
+      ) {
+        lastTransformRef.current = {
+          position: currentTransform.position.clone(),
+          rotation: currentTransform.rotation.clone(),
+          scale: currentTransform.scale.clone(),
+        };
 
         onTransform(currentTransform);
       }
@@ -142,6 +143,12 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
 
         transformRef.current.setMode(transformMode);
         transformRef.current.attach(modelRef.current);
+        transformRef.current.setRotationSnap(rotationSnap);
+        if (translationSnap) {
+          transformRef.current.setTranslationSnap(translationSnap);
+        } else {
+          transformRef.current.setTranslationSnap(undefined);
+        }
 
         // Set initial position
         const initialPosition = calculateOptimalGizmoPosition(modelRef.current);
@@ -182,7 +189,7 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
         object={modelRef.current}
         mode={transformMode}
         onMouseDown={() => {
-          gl.domElement.style.cursor = 'grab';
+          gl.domElement.style.cursor = 'grabbing';
           // Disable orbit controls when transform controls are active
           window.dispatchEvent(new CustomEvent('disable-orbit-controls', { detail: { disabled: true } }));
         }}
@@ -207,6 +214,8 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
         showZ
         size={gizmoSize}
         position={gizmoPositionRef.current}
+        rotationSnap={rotationSnap}
+        translationSnap={translationSnap}
       />
 
       {/* Optional: Add visual indicator for gizmo position */}
