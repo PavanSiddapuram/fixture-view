@@ -606,7 +606,6 @@ function Scene({
       {currentFile && transformEnabled && (
         <ModelTransformControls
           model={currentFile.mesh}
-          position={modelTransform.position}
           onTransform={setModelTransform}
           enabled={transformEnabled}
           snapToGrid={true}

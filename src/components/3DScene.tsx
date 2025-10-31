@@ -296,8 +296,10 @@ function TransformAnchor({
   const position = bounds ? bounds.center.toArray() : [0, 0, 0];
   const longestEdge = bounds ? Math.max(bounds.size.x, bounds.size.y, bounds.size.z) : 1;
   const anchorRadius = Math.max(longestEdge * 0.02, 2.4);
-  const degreeLabelOffset = Math.max(longestEdge * 0.35, anchorRadius * 4.2);
-  const axisDotOffset = Math.max(longestEdge * 0.28, anchorRadius * 3.6);
+  // Ring size derived from bounds so it reads like a perspective 3D circle regardless of camera view
+  const circleRadius = Math.max(longestEdge * 0.55, anchorRadius * 7.2);
+  const circleThickness = anchorRadius * 0.22;
+  const degreeLabelOffset = circleRadius * 1.02;
   const axisColors = {
     x: '#ef4444',
     y: '#22c55e',
@@ -361,20 +363,20 @@ function TransformAnchor({
 
   return (
     <group position={position as [number, number, number]} frustumCulled={false} renderOrder={1500}>
-      {(transformEnabled || currentMode === 'rotate') && (
+      {currentMode === 'rotate' && (
         <group>
-          {/* Axis dots for quick reference */}
-          <mesh position={[axisDotOffset, 0, 0]}>
+          {/* Axis dots positioned along the rotate rings (no extra ring visuals) */}
+          <mesh position={[circleRadius, 0, 0]}>
             <sphereGeometry args={[anchorRadius * 0.55, 24, 24]} />
-            <meshBasicMaterial color={axisColors.x} depthWrite={false} transparent opacity={currentMode === 'rotate' ? 0.95 : 0.45} />
+            <meshBasicMaterial color={axisColors.x} depthWrite={false} depthTest={false} transparent opacity={0.95} />
           </mesh>
-          <mesh position={[0, axisDotOffset, 0]}>
+          <mesh position={[0, circleRadius, 0]}>
             <sphereGeometry args={[anchorRadius * 0.55, 24, 24]} />
-            <meshBasicMaterial color={axisColors.y} depthWrite={false} transparent opacity={currentMode === 'rotate' ? 0.95 : 0.45} />
+            <meshBasicMaterial color={axisColors.y} depthWrite={false} depthTest={false} transparent opacity={0.95} />
           </mesh>
-          <mesh position={[0, 0, axisDotOffset]}>
+          <mesh position={[0, 0, circleRadius]}>
             <sphereGeometry args={[anchorRadius * 0.55, 24, 24]} />
-            <meshBasicMaterial color={axisColors.z} depthWrite={false} transparent opacity={currentMode === 'rotate' ? 0.95 : 0.45} />
+            <meshBasicMaterial color={axisColors.z} depthWrite={false} depthTest={false} transparent opacity={0.95} />
           </mesh>
 
           {currentMode === 'rotate' && (
@@ -431,12 +433,13 @@ function TransformAnchor({
         onPointerOver={handlePointerOver}
         onPointerOut={handlePointerOut}
       >
-        <sphereGeometry args={[anchorRadius, 32, 32]} />
+        <sphereGeometry args={[anchorRadius * 0.55, 32, 32]} />
         <meshBasicMaterial
           color={transformEnabled ? anchorColor : '#d4d4d8'}
           transparent
           opacity={hovered ? 0.6 : 0.32}
           depthWrite={false}
+          depthTest={false}
         />
       </mesh>
     </group>

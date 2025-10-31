@@ -5,7 +5,6 @@ import * as THREE from 'three';
 
 interface ModelTransformControlsProps {
   model: any;
-  position: THREE.Vector3;
   onTransform?: (transform: { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }) => void;
   snapToGrid?: boolean;
   gridSize?: number;
@@ -16,7 +15,6 @@ interface ModelTransformControlsProps {
 
 const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
   model,
-  position,
   onTransform,
   snapToGrid = true,
   gridSize = 5,
@@ -27,82 +25,39 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
   const transformRef = useRef<any>(null);
   const { camera, gl } = useThree();
   const lastTransformRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null);
-  const gizmoPositionRef = useRef<THREE.Vector3>(new THREE.Vector3());
-  const rotationSnap = THREE.MathUtils.degToRad(5);
+  const [rotationSnapDeg, setRotationSnapDeg] = React.useState<number>(5);
+  const rotationSnap = THREE.MathUtils.degToRad(rotationSnapDeg);
   const translationSnap = useMemo(() => (snapToGrid ? gridSize : undefined), [snapToGrid, gridSize]);
+  const overlayRef = useRef<THREE.Group>(null);
+  const [activeAxis, setActiveAxis] = React.useState<'X' | 'Y' | 'Z' | null>(null);
+  
 
-  // Calculate optimal gizmo position on model surface
-  const calculateOptimalGizmoPosition = useCallback((modelMesh: THREE.Mesh) => {
-    if (!modelMesh) return new THREE.Vector3();
-
-    const boundingBox = new THREE.Box3().setFromObject(modelMesh);
-    const center = boundingBox.getCenter(new THREE.Vector3());
-    const size = boundingBox.getSize(new THREE.Vector3());
-
-    // Get camera direction to determine which face is most visible
-    const cameraDirection = new THREE.Vector3();
-    camera.getWorldDirection(cameraDirection);
-
-    // Find the face that's most facing the camera
-    const faces = [
-      { normal: new THREE.Vector3(1, 0, 0), offset: size.x / 2, axis: 'x' },
-      { normal: new THREE.Vector3(-1, 0, 0), offset: -size.x / 2, axis: '-x' },
-      { normal: new THREE.Vector3(0, 1, 0), offset: size.y / 2, axis: 'y' },
-      { normal: new THREE.Vector3(0, -1, 0), offset: -size.y / 2, axis: '-y' },
-      { normal: new THREE.Vector3(0, 0, 1), offset: size.z / 2, axis: 'z' },
-      { normal: new THREE.Vector3(0, 0, -1), offset: -size.z / 2, axis: '-z' },
-    ];
-
-    // Score each face based on how much it faces the camera
-    let bestFace = faces[0];
-    let bestScore = -Infinity;
-
-    faces.forEach(face => {
-      const dot = face.normal.dot(cameraDirection);
-      const score = dot; // Prefer faces that are more perpendicular to camera view
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestFace = face;
-      }
-    });
-
-    // Position gizmo on the selected face
-    const gizmoPosition = center.clone();
-    switch (bestFace.axis) {
-      case 'x':
-        gizmoPosition.x += bestFace.offset;
-        break;
-      case '-x':
-        gizmoPosition.x += bestFace.offset;
-        break;
-      case 'y':
-        gizmoPosition.y += bestFace.offset;
-        break;
-      case '-y':
-        gizmoPosition.y += bestFace.offset;
-        break;
-      case 'z':
-        gizmoPosition.z += bestFace.offset;
-        break;
-      case '-z':
-        gizmoPosition.z += bestFace.offset;
-        break;
-    }
-
-    return gizmoPosition;
-  }, [camera]);
-
-  // Update gizmo position based on camera angle
+  // Keep overlay glued to gizmo/object orientation and position
   useFrame(() => {
-    if (transformRef.current && modelRef?.current && enabled) {
-      const optimalPosition = calculateOptimalGizmoPosition(modelRef.current);
-      gizmoPositionRef.current.copy(optimalPosition);
+    if (!overlayRef.current || !modelRef?.current || !transformRef.current) return;
+    const group = overlayRef.current;
+    // Glue overlay to TransformControls (same space as gizmo rings)
+    group.position.copy(transformRef.current.position);
+    group.quaternion.copy(transformRef.current.quaternion);
+    group.updateMatrixWorld();
 
-      // Update transform controls position
-      transformRef.current.position.copy(optimalPosition);
-      transformRef.current.updateMatrixWorld(true);
-    }
+    // Update dot positions by current model size (mirrors Drei ring radius behavior)
+    const bbox = new THREE.Box3().setFromObject(modelRef.current);
+    const size = bbox.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const radius = Math.max(maxDim * 0.6, 0.001);
+
+    // Children: 0=xDot, 1=yDot, 2=zDot
+    const xDot = group.children[0] as THREE.Object3D | undefined;
+    const yDot = group.children[1] as THREE.Object3D | undefined;
+    const zDot = group.children[2] as THREE.Object3D | undefined;
+    if (xDot) xDot.position.set(0, 0, radius); // X-axis ring (YZ plane) -> dot at +Z
+    if (yDot) yDot.position.set(radius, 0, 0); // Y-axis ring (XZ plane) -> dot at +X
+    if (zDot) zDot.position.set(0, radius, 0); // Z-axis ring (XY plane) -> dot at +Y
+
+    // Highlight active axis
+    const axis = (transformRef.current && transformRef.current.axis) || null;
+    setActiveAxis(axis);
   });
 
   // Use frame loop to detect transform changes
@@ -149,19 +104,14 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
         } else {
           transformRef.current.setTranslationSnap(undefined);
         }
-
-        // Set initial position
-        const initialPosition = calculateOptimalGizmoPosition(modelRef.current);
-        gizmoPositionRef.current.copy(initialPosition);
-        transformRef.current.position.copy(initialPosition);
-
-        // Force update to ensure gizmos are visible
+        // Anchor gizmo at model origin
+        transformRef.current.position.copy(modelRef.current.position);
         transformRef.current.updateMatrixWorld(true);
       } catch (error) {
         console.error('Error updating transform controls:', error);
       }
     }
-  }, [modelRef?.current, enabled, transformMode, calculateOptimalGizmoPosition]);
+  }, [modelRef?.current, enabled, transformMode, rotationSnap, translationSnap]);
 
   // Early return if not enabled or no model ref
   if (!enabled || !modelRef?.current) {
@@ -180,7 +130,7 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
   // Dynamic size based on model dimensions and camera distance
   const baseSize = maxDimension * 0.15;
   const distanceScale = Math.max(0.5, Math.min(2.0, cameraDistance / 10)); // Scale based on distance
-  const gizmoSize = Math.max(0.3, Math.min(1.5, baseSize * distanceScale));
+  const gizmoSize = Math.max(1.0, Math.min(1.8, baseSize * distanceScale));
 
   return (
     <>
@@ -213,18 +163,29 @@ const ModelTransformControls: React.FC<ModelTransformControlsProps> = ({
         showY
         showZ
         size={gizmoSize}
-        position={gizmoPositionRef.current}
         rotationSnap={rotationSnap}
         translationSnap={translationSnap}
       />
 
-      {/* Optional: Add visual indicator for gizmo position */}
-      {enabled && (
-        <mesh position={gizmoPositionRef.current}>
-          <sphereGeometry args={[0.02]} />
-          <meshBasicMaterial color="red" />
-        </mesh>
+      {/* Overlay dots glued to rings (visual only) */}
+      {transformMode === 'rotate' && (
+        <group ref={overlayRef} frustumCulled={false}>
+          <mesh>
+            <sphereGeometry args={[Math.max(0.02, maxDimension * 0.012)]} />
+            <meshBasicMaterial color="#ef4444" transparent opacity={activeAxis==='X'?0.95:0.6} depthTest={false} depthWrite={false} />
+          </mesh>
+          <mesh>
+            <sphereGeometry args={[Math.max(0.02, maxDimension * 0.012)]} />
+            <meshBasicMaterial color="#22c55e" transparent opacity={activeAxis==='Y'?0.95:0.6} depthTest={false} depthWrite={false} />
+          </mesh>
+          <mesh>
+            <sphereGeometry args={[Math.max(0.02, maxDimension * 0.012)]} />
+            <meshBasicMaterial color="#3b82f6" transparent opacity={activeAxis==='Z'?0.95:0.6} depthTest={false} depthWrite={false} />
+          </mesh>
+        </group>
       )}
+
+      {/* No debug marker */}
     </>
   );
 };
