@@ -122,16 +122,36 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
     };
 
     const handleToolSelect = (toolId: string) => {
-      console.log('Tool selected:', toolId);
       switch (toolId) {
         case 'import':
           handleOpenFilePicker();
-          break;
-        case 'support':
+          return;
+        case 'baseplates':
           setIsBaseplateDialogOpen(true);
-          break;
+          return;
+        case 'supports':
+          window.dispatchEvent(new CustomEvent('open-supports-dialog'));
+          return;
+        case 'cavity':
+          window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
+          return;
+        case 'clamps':
+          window.dispatchEvent(new CustomEvent('open-clamps-dialog'));
+          return;
+        case 'labels':
+          window.dispatchEvent(new CustomEvent('open-labels-dialog'));
+          return;
+        case 'drill':
+          window.dispatchEvent(new CustomEvent('open-drill-dialog'));
+          return;
+        case 'optimize':
+          window.dispatchEvent(new CustomEvent('optimize-material'));
+          return;
+        case 'export':
+          window.dispatchEvent(new CustomEvent('open-export-dialog'));
+          return;
         default:
-          console.log('Tool selected:', toolId);
+          console.log('Unhandled tool:', toolId);
       }
     };
 

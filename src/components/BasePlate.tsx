@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
 interface BasePlateProps {
-  type: 'rectangular' | 'circular' | 'convex-hull' | 'cylindrical' | 'v-block' | 'hexagonal' | 'perforated-panel' | 'metal-wooden-plate';
+  type: 'rectangular' | 'convex-hull' | 'perforated-panel' | 'metal-wooden-plate';
   width?: number;
   height?: number;
   depth?: number;
@@ -13,6 +13,9 @@ interface BasePlateProps {
   onSelect?: () => void;
   selected?: boolean;
   modelGeometry?: THREE.BufferGeometry; // For convex hull around model
+  oversizeXY?: number; // extra margin on XZ for convex hull
+  pitch?: number; // perforated panel hole spacing
+  holeDiameter?: number; // perforated panel hole diameter
 }
 
 const BasePlate: React.FC<BasePlateProps> = ({
@@ -25,7 +28,10 @@ const BasePlate: React.FC<BasePlateProps> = ({
   material = 'metal',
   onSelect,
   selected = false,
-  modelGeometry
+  modelGeometry,
+  oversizeXY = 10,
+  pitch = 20,
+  holeDiameter = 6
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
@@ -64,84 +70,53 @@ const BasePlate: React.FC<BasePlateProps> = ({
   // Create geometry based on type
   const geometry = useMemo(() => {
     switch (type) {
-      case 'circular':
-      case 'cylindrical':
-        return new THREE.CylinderGeometry(radius, radius, depth, 32);
-
-      case 'hexagonal':
-        // Create hexagonal prism geometry
-        const hexShape = new THREE.Shape();
-        const hexRadius = Math.min(width, height) / 2;
-        for (let i = 0; i < 6; i++) {
-          const angle = (i / 6) * Math.PI * 2;
-          const x = hexRadius * Math.cos(angle);
-          const y = hexRadius * Math.sin(angle);
-          if (i === 0) hexShape.moveTo(x, y);
-          else hexShape.lineTo(x, y);
-        }
-        const hexGeometry = new THREE.ExtrudeGeometry(hexShape, {
-          depth: depth,
-          bevelEnabled: false
-        });
-        return hexGeometry;
-
-      case 'v-block':
-        // Create V-shaped geometry for supporting round parts
-        const vShape = new THREE.Shape();
-        const vWidth = width;
-        const vHeight = height;
-        vShape.moveTo(-vWidth/2, 0);
-        vShape.lineTo(0, -vHeight);
-        vShape.lineTo(vWidth/2, 0);
-        vShape.lineTo(-vWidth/2, 0);
-        return new THREE.ExtrudeGeometry(vShape, {
-          depth: depth,
-          bevelEnabled: false
-        });
-
       case 'convex-hull':
         if (modelGeometry && modelGeometry.attributes && modelGeometry.attributes.position) {
           try {
-            // Since ConvexGeometry is not available, create a bounding box/sphere hull
-            const positions = modelGeometry.attributes.position;
-            const vertices = [];
-
-            // Extract vertices from model geometry
-            for (let i = 0; i < positions.count; i++) {
+            // Build a 2D convex hull of the XZ projection for precise footprint
+            const positions = modelGeometry.attributes.position as THREE.BufferAttribute;
+            const points2D: Array<{x:number; z:number}> = [];
+            const dedupe = new Set<string>();
+            const sampleStep = Math.max(1, Math.floor(positions.count / 5000));
+            for (let i = 0; i < positions.count; i += sampleStep) {
               const x = positions.getX(i);
-              const y = positions.getY(i);
               const z = positions.getZ(i);
-              vertices.push(new THREE.Vector3(x, y, z));
+              const key = `${Math.round(x*100)}:${Math.round(z*100)}`;
+              if (!dedupe.has(key)) { dedupe.add(key); points2D.push({x, z}); }
             }
 
-            if (vertices.length > 0) {
-              // Calculate bounding box
-              const box = new THREE.Box3().setFromPoints(vertices);
-              const size = box.getSize(new THREE.Vector3());
-              const center = box.getCenter(new THREE.Vector3());
+            if (points2D.length >= 3) {
+              // Monotone chain convex hull in 2D
+              const sorted = points2D.slice().sort((a,b)=> a.x===b.x ? a.z-b.z : a.x-b.x);
+              const cross = (o:any,a:any,b:any)=> (a.x-o.x)*(b.z-o.z) - (a.z-o.z)*(b.x-o.x);
+              const lower:any[]=[]; for (const p of sorted){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop(); lower.push(p);} 
+              const upper:any[]=[]; for (let i=sorted.length-1;i>=0;i--){ const p=sorted[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop(); upper.push(p);} 
+              const hull = lower.slice(0, lower.length-1).concat(upper.slice(0, upper.length-1));
 
-              // Create a rounded rectangular baseplate that encompasses the model
-              const hullWidth = Math.max(size.x * 1.5, width || 100);
-              const hullDepth = Math.max(size.z * 1.5, height || 100);
-
-              // Create a rounded rectangle shape
-              const hullShape = new THREE.Shape();
-              const cornerRadius = Math.min(hullWidth, hullDepth) * 0.1; // Corner radius
-
-              hullShape.moveTo(-hullWidth/2 + cornerRadius, -hullDepth/2);
-              hullShape.lineTo(hullWidth/2 - cornerRadius, -hullDepth/2);
-              hullShape.quadraticCurveTo(hullWidth/2, -hullDepth/2, hullWidth/2, -hullDepth/2 + cornerRadius);
-              hullShape.lineTo(hullWidth/2, hullDepth/2 - cornerRadius);
-              hullShape.quadraticCurveTo(hullWidth/2, hullDepth/2, hullWidth/2 - cornerRadius, hullDepth/2);
-              hullShape.lineTo(-hullWidth/2 + cornerRadius, hullDepth/2);
-              hullShape.quadraticCurveTo(-hullWidth/2, hullDepth/2, -hullWidth/2, hullDepth/2 - cornerRadius);
-              hullShape.lineTo(-hullWidth/2, -hullDepth/2 + cornerRadius);
-              hullShape.quadraticCurveTo(-hullWidth/2, -hullDepth/2, -hullWidth/2 + cornerRadius, -hullDepth/2);
-
-              return new THREE.ExtrudeGeometry(hullShape, {
-                depth: depth,
-                bevelEnabled: false
+              // Inflate by oversizeXY
+              const cx = hull.reduce((s,p)=>s+p.x,0)/hull.length;
+              const cz = hull.reduce((s,p)=>s+p.z,0)/hull.length;
+              const margin = (typeof oversizeXY === 'number' ? oversizeXY : 10);
+              const inflated = hull.map(p=>{
+                const dx = p.x - cx; const dz = p.z - cz;
+                const len = Math.hypot(dx,dz) || 1;
+                return { x: p.x + (dx/len)*margin, z: p.z + (dz/len)*margin };
               });
+
+              // Create shape from hull polygon
+              const shape = new THREE.Shape();
+              // Center shape about centroid so geometry is centered at origin
+              shape.moveTo(inflated[0].x - cx, inflated[0].z - cz);
+              for (let i=1;i<inflated.length;i++){ shape.lineTo(inflated[i].x - cx, inflated[i].z - cz); }
+              shape.closePath();
+
+              const g = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: false });
+              // Center along extrusion axis and align thickness to Y
+              g.translate(0, 0, -depth / 2);
+              g.rotateX(-Math.PI / 2);
+              g.computeBoundingBox();
+              g.computeVertexNormals();
+              return g;
             }
           } catch (error) {
             console.warn('Error creating convex hull geometry, falling back to rectangular:', error);
@@ -163,10 +138,15 @@ const BasePlate: React.FC<BasePlateProps> = ({
         hullShape.lineTo(-fallbackWidth/2, -fallbackHeight/2 + cornerRadius);
         hullShape.quadraticCurveTo(-fallbackWidth/2, -fallbackHeight/2, -fallbackWidth/2 + cornerRadius, -fallbackHeight/2);
 
-        return new THREE.ExtrudeGeometry(hullShape, {
+        const g = new THREE.ExtrudeGeometry(hullShape, {
           depth: depth,
           bevelEnabled: false
         });
+        g.translate(0, 0, -depth / 2);
+        g.rotateX(-Math.PI / 2);
+        g.computeBoundingBox();
+        g.computeVertexNormals();
+        return g;
 
       case 'perforated-panel':
         // Create perforated panel with hole pattern
@@ -196,8 +176,8 @@ const BasePlate: React.FC<BasePlateProps> = ({
     if (type !== 'perforated-panel') return null;
 
     const meshes: JSX.Element[] = [];
-    const holeSpacing = 10;
-    const holeRadius = 1;
+    const holeSpacing = typeof pitch === 'number' ? pitch : 20;
+    const holeRadius = (typeof holeDiameter === 'number' ? holeDiameter : 6) / 2;
     const panelWidth = width;
     const panelHeight = height;
 
@@ -205,7 +185,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
       for (let y = -panelHeight/2 + holeSpacing; y < panelHeight/2; y += holeSpacing) {
         meshes.push(
           <mesh key={`hole-${x}-${y}`} position={[x, depth/2 + 0.1, y]}>
-            <cylinderGeometry args={[holeRadius, holeRadius, 0.5, 8]} />
+            <cylinderGeometry args={[holeRadius, holeRadius, 0.5, 12]} />
             <meshBasicMaterial color={0x444444} />
           </mesh>
         );
@@ -213,7 +193,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
     }
 
     return meshes;
-  }, [type, width, height, depth]);
+  }, [type, width, height, depth, pitch, holeDiameter]);
 
   return (
     <group ref={groupRef} position={position}>
@@ -245,3 +225,4 @@ const BasePlate: React.FC<BasePlateProps> = ({
 };
 
 export default BasePlate;
+

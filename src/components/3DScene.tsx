@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls as DreiOrbitControls, Environment, Html } from '@react-three/drei';
+import { Environment, OrbitControls as DreiOrbitControls, Html } from '@react-three/drei';
 import { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import BasePlate from "./BasePlate";
 import { ProcessedFile, ViewOrientation } from "@/modules/FileImport/types";
@@ -620,14 +620,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placedComponents, setPlacedComponents] = useState<Array<{ component: any; position: THREE.Vector3; id: string }>>([]);
   const [selectedComponent, setSelectedComponent] = useState<any>(null);
   const [basePlate, setBasePlate] = useState<{
-    type: 'rectangular' | 'circular' | 'convex-hull' | 'cylindrical' | 'v-block' | 'hexagonal' | 'perforated-panel' | 'metal-wooden-plate';
-    width?: number;
-    height?: number;
-    depth?: number;
-    radius?: number;
+    type: 'rectangular' | 'convex-hull' | 'perforated-panel' | 'metal-wooden-plate';
+    width?: number;      // X extent
+    height?: number;     // Z extent
+    depth?: number;      // Y thickness
     position?: THREE.Vector3;
     material?: 'metal' | 'wood' | 'plastic';
     id?: string;
+    oversizeXY?: number; // convex hull extra per side (mm)
+    pitch?: number;      // perforated: hole spacing (mm)
+    holeDiameter?: number; // perforated / metal mounting
   } | null>(null);
   const modelMeshRef = useRef<THREE.Mesh>(null);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
@@ -713,7 +715,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     }
   }, [currentFile]);
 
-  const centerCrossLength = React.useMemo(() => computeCrossHalfLength(modelBounds), [modelBounds]);
+  const centerCrossLength = React.useMemo(() => {
+    let len = computeCrossHalfLength(modelBounds);
+    if (basePlate) {
+      const halfPlate = Math.max((basePlate.width ?? 0) / 2, (basePlate.height ?? 0) / 2);
+      const pad = modelBounds ? getFootprintMetrics(modelBounds).padding : 10;
+      len = Math.max(len, halfPlate + pad);
+    }
+    return len;
+  }, [modelBounds, basePlate]);
 
   // Handle mouse events for drag and drop (disabled for now)
   const handlePointerMove = useCallback((event: any) => {
@@ -740,61 +750,70 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       const { type, option, dimensions } = e.detail;
       console.log('Creating baseplate:', type, option, dimensions);
 
-      // Generate unique ID for the base plate
       const basePlateId = `baseplate-${Date.now()}`;
 
-      // Base plate dimensions - positioned under the model
-      let basePlateConfig: typeof basePlate = {
-        type: option as any,
-        position: new THREE.Vector3(0, -dimensions.height / 2, 0), // Start at origin, will be adjusted
-        material: dimensions.material || 'metal',
-        depth: dimensions.height || 10,
-        id: basePlateId
+      // Model footprint in mm
+      const box = modelMeshRef.current ? new THREE.Box3().setFromObject(modelMeshRef.current) : null;
+      const size = box ? box.getSize(new THREE.Vector3()) : new THREE.Vector3(60, 60, 60);
+      const fitPadTotal = 20; // +20mm total (10mm per side)
+
+      // Helper to coerce dimension
+      const clampPos = (v: any, min: number, fallback: number) => Math.max(Number(v) || fallback, min);
+
+      // Thickness defaults per type
+      const tRect = 5;
+      const tHull = 5;
+      const tStd = 10;
+
+      let cfg: NonNullable<typeof basePlate> = {
+        type: (option as any),
+        id: basePlateId,
+        material: (dimensions?.material || 'metal'),
+        position: new THREE.Vector3(0, 0, 0)
       };
 
-      // Calculate proper baseplate position under the model
+      if (option === 'rectangular') {
+        const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
+        const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
+        const depth = clampPos(dimensions?.height, 1, tRect);
+        cfg = { ...cfg, type: 'rectangular', width, height, depth };
+      } else if (option === 'convex-hull') {
+        const depth = clampPos(dimensions?.height, 1, tHull);
+        const oversizeXY = clampPos(dimensions?.oversizeXY, 0, 10);
+        // width/height are derived in BasePlate from model geometry + oversize, we pass hint values too
+        cfg = { ...cfg, type: 'convex-hull', depth, oversizeXY, width: size.x + oversizeXY * 2, height: size.z + oversizeXY * 2 };
+      } else if (option === 'perforated-panel') {
+        const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
+        const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
+        const depth = clampPos(dimensions?.height, 1, tStd);
+        const pitch = clampPos(dimensions?.pitch ?? dimensions?.holeDistance, 2, 20);
+        const holeDiameter = clampPos(dimensions?.holeDiameter, 1, 6);
+        cfg = { ...cfg, type: 'perforated-panel', width, height, depth, pitch, holeDiameter };
+      } else if (option === 'metal-wooden-plate') {
+        const width = clampPos(dimensions?.width, 10, size.x + fitPadTotal);
+        const height = clampPos(dimensions?.length ?? dimensions?.depth, 10, size.z + fitPadTotal);
+        const depth = clampPos(dimensions?.height, 1, tStd);
+        const holeDiameter = clampPos(dimensions?.holeDiameter, 1, 6);
+        cfg = { ...cfg, type: 'metal-wooden-plate', width, height, depth, holeDiameter };
+      } else {
+        console.warn('Unsupported baseplate option:', option);
+        return;
+      }
+
+      // Place plate so its top is on the XY plane (y = 0) => center at -thickness/2
+      cfg.position = new THREE.Vector3(0, -(cfg.depth ?? tStd) / 2, 0);
+
+      // Ensure model rests on top: set model minY to 0 if needed
       if (modelMeshRef.current) {
-        const modelBox = new THREE.Box3().setFromObject(modelMeshRef.current);
-        const modelBottom = modelBox.min.y;
-        basePlateConfig.position = new THREE.Vector3(0, modelBottom - dimensions.height / 2, 0);
+        const mbox = new THREE.Box3().setFromObject(modelMeshRef.current);
+        const minY = mbox.min.y;
+        if (Math.abs(minY) > 1e-3) {
+          modelMeshRef.current.position.y -= minY; // shift so minY becomes 0
+          setModelTransform({ position: modelMeshRef.current.position.clone(), rotation: modelMeshRef.current.rotation.clone(), scale: modelMeshRef.current.scale.clone() });
+        }
       }
 
-      // Set dimensions based on type and provided dimensions
-      switch (option) {
-        case 'rectangular':
-        case 'metal-wooden-plate':
-          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
-          break;
-
-        case 'circular':
-        case 'cylindrical':
-          basePlateConfig.radius = Math.max(dimensions.radius || 50, 25);
-          break;
-
-        case 'hexagonal':
-          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-          basePlateConfig.height = Math.max(dimensions.height || 100, 50);
-          break;
-
-        case 'v-block':
-          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-          basePlateConfig.height = Math.max(dimensions.height || 50, 25);
-          break;
-
-        case 'convex-hull':
-          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
-          // For convex hull, we'll need model geometry - handled in render
-          break;
-
-        case 'perforated-panel':
-          basePlateConfig.width = Math.max(dimensions.width || 100, 50);
-          basePlateConfig.height = Math.max(dimensions.length || 100, 50);
-          break;
-      }
-
-      setBasePlate(basePlateConfig);
+      setBasePlate(cfg);
     };
 
     window.addEventListener('create-baseplate', handleCreateBaseplate as EventListener);
@@ -951,9 +970,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           width={basePlate.width}
           height={basePlate.height}
           depth={basePlate.depth}
-          radius={basePlate.radius}
           position={basePlate.position}
           material={basePlate.material}
+          oversizeXY={basePlate.oversizeXY}
+          pitch={basePlate.pitch}
+          holeDiameter={basePlate.holeDiameter}
           modelGeometry={basePlate.type === 'convex-hull' && modelMeshRef.current?.geometry ? modelMeshRef.current.geometry : undefined}
           selected={false}
           onSelect={() => {
@@ -991,7 +1012,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {currentFile && transformEnabled && (
         <ModelTransformControls
           model={currentFile.mesh}
-          position={modelTransform.position}
           onTransform={setModelTransform}
           enabled={transformEnabled}
           snapToGrid={true}

@@ -17,10 +17,7 @@ import {
   Grid3X3,
   Layers,
   CheckCircle,
-  X,
-  Circle,
-  Triangle,
-  Hexagon
+  X
 } from "lucide-react";
 
 interface BaseplateDialogProps {
@@ -142,33 +139,6 @@ const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
                         </div>
                       </div>
                     </SelectItem>
-                    <SelectItem value="cylindrical">
-                      <div className="flex items-center gap-2">
-                        <Circle className="w-4 h-4" />
-                        <div>
-                          <div className="font-medium">Cylindrical</div>
-                          <div className="text-xs text-muted-foreground">Round baseplate for cylindrical parts</div>
-                        </div>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="v-block">
-                      <div className="flex items-center gap-2">
-                        <Triangle className="w-4 h-4" />
-                        <div>
-                          <div className="font-medium">V-Block</div>
-                          <div className="text-xs text-muted-foreground">V-shaped support for round parts</div>
-                        </div>
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="hexagonal">
-                      <div className="flex items-center gap-2">
-                        <Hexagon className="w-4 h-4" />
-                        <div>
-                          <div className="font-medium">Hexagonal</div>
-                          <div className="text-xs text-muted-foreground">Six-sided baseplate design</div>
-                        </div>
-                      </div>
-                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -194,27 +164,7 @@ const BaseplateDialog: React.FC<BaseplateDialogProps> = ({
                         <p>• Conformal to part geometry</p>
                       </>
                     )}
-                    {selected3DType === 'cylindrical' && (
-                      <>
-                        <p>• Round baseplate design</p>
-                        <p>• Perfect for cylindrical parts</p>
-                        <p>• Circular mounting pattern</p>
-                      </>
-                    )}
-                    {selected3DType === 'v-block' && (
-                      <>
-                        <p>• V-shaped support design</p>
-                        <p>• Ideal for round workpieces</p>
-                        <p>• Self-centering support</p>
-                      </>
-                    )}
-                    {selected3DType === 'hexagonal' && (
-                      <>
-                        <p>• Six-sided baseplate design</p>
-                        <p>• Efficient material usage</p>
-                        <p>• Unique mounting options</p>
-                      </>
-                    )}
+                    
                   </div>
                 </div>
               )}
