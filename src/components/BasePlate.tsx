@@ -16,6 +16,9 @@ interface BasePlateProps {
   oversizeXY?: number; // extra margin on XZ for convex hull
   pitch?: number; // perforated panel hole spacing
   holeDiameter?: number; // perforated panel hole diameter
+  onPointerDown?: (e: any) => void;
+  onPointerMove?: (e: any) => void;
+  onPointerUp?: (e: any) => void;
 }
 
 const BasePlate: React.FC<BasePlateProps> = ({
@@ -32,6 +35,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
   oversizeXY = 10,
   pitch = 20,
   holeDiameter = 6
+  , onPointerDown, onPointerMove, onPointerUp
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
@@ -200,6 +204,9 @@ const BasePlate: React.FC<BasePlateProps> = ({
       <mesh
         ref={meshRef}
         onClick={onSelect}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
         geometry={geometry}
         material={new THREE.MeshStandardMaterial(materialProps)}
         receiveShadow
@@ -225,4 +232,6 @@ const BasePlate: React.FC<BasePlateProps> = ({
 };
 
 export default BasePlate;
+
+
 
