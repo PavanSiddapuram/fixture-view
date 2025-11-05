@@ -40,36 +40,48 @@ const BasePlate: React.FC<BasePlateProps> = ({
   const meshRef = useRef<THREE.Mesh>(null);
   const groupRef = useRef<THREE.Group>(null);
 
-  // Material properties based on type
+  // Material properties based on type (with transparency for perforated panels)
   const materialProps = useMemo(() => {
+    let base: any;
     switch (material) {
       case 'metal':
-        return {
+        base = {
           color: selected ? 0x0066cc : 0x888888,
           metalness: 0.8,
           roughness: 0.2,
           emissive: selected ? 0x001133 : 0x222222
         };
+        break;
       case 'wood':
-        return {
+        base = {
           color: selected ? 0xcc6600 : 0x8B4513,
           metalness: 0.1,
           roughness: 0.8
         };
+        break;
       case 'plastic':
-        return {
+        base = {
           color: selected ? 0x66cc00 : 0x333333,
           metalness: 0.0,
           roughness: 0.3
         };
+        break;
       default:
-        return {
+        base = {
           color: 0x888888,
           metalness: 0.5,
           roughness: 0.5
         };
     }
-  }, [material, selected]);
+    if (type === 'perforated-panel') {
+      base = {
+        ...base,
+        transparent: true,
+        opacity: 0.35,
+      };
+    }
+    return base;
+  }, [material, selected, type]);
 
   // Create geometry based on type
   const geometry = useMemo(() => {
@@ -153,17 +165,99 @@ const BasePlate: React.FC<BasePlateProps> = ({
         return g;
 
       case 'perforated-panel':
-        // Create perforated panel with hole pattern
-        const panelGeometry = new THREE.BoxGeometry(width, depth, height);
-        return panelGeometry;
+        // Rounded rectangle with slight bevel for soft edges
+        {
+          const cornerRadius = Math.min(width, height) * 0.08;
+          const shape = new THREE.Shape();
+          const hw = width / 2;
+          const hh = height / 2;
+          const r = Math.min(cornerRadius, hw, hh);
+          shape.moveTo(-hw + r, -hh);
+          shape.lineTo(hw - r, -hh);
+          shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
+          shape.lineTo(hw, hh - r);
+          shape.quadraticCurveTo(hw, hh, hw - r, hh);
+          shape.lineTo(-hw + r, hh);
+          shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
+          shape.lineTo(-hw, -hh + r);
+          shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+
+          const g = new THREE.ExtrudeGeometry(shape, {
+            depth: depth,
+            bevelEnabled: true,
+            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelSize: Math.min(0.8, r * 0.25),
+            bevelSegments: 2,
+          });
+          g.translate(0, 0, -depth / 2);
+          g.rotateX(-Math.PI / 2);
+          g.computeBoundingBox();
+          g.computeVertexNormals();
+          return g;
+        }
 
       case 'metal-wooden-plate':
-        // Simple rectangular plate
-        return new THREE.BoxGeometry(width, depth, height);
+        {
+          const cornerRadius = Math.min(width, height) * 0.06;
+          const shape = new THREE.Shape();
+          const hw = width / 2;
+          const hh = height / 2;
+          const r = Math.min(cornerRadius, hw, hh);
+          shape.moveTo(-hw + r, -hh);
+          shape.lineTo(hw - r, -hh);
+          shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
+          shape.lineTo(hw, hh - r);
+          shape.quadraticCurveTo(hw, hh, hw - r, hh);
+          shape.lineTo(-hw + r, hh);
+          shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
+          shape.lineTo(-hw, -hh + r);
+          shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+
+          const g = new THREE.ExtrudeGeometry(shape, {
+            depth: depth,
+            bevelEnabled: true,
+            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelSize: Math.min(0.8, r * 0.2),
+            bevelSegments: 2,
+          });
+          g.translate(0, 0, -depth / 2);
+          g.rotateX(-Math.PI / 2);
+          g.computeBoundingBox();
+          g.computeVertexNormals();
+          return g;
+        }
 
       case 'rectangular':
       default:
-        return new THREE.BoxGeometry(width, depth, height);
+        {
+          const cornerRadius = Math.min(width, height) * 0.08;
+          const shape = new THREE.Shape();
+          const hw = width / 2;
+          const hh = height / 2;
+          const r = Math.min(cornerRadius, hw, hh);
+          shape.moveTo(-hw + r, -hh);
+          shape.lineTo(hw - r, -hh);
+          shape.quadraticCurveTo(hw, -hh, hw, -hh + r);
+          shape.lineTo(hw, hh - r);
+          shape.quadraticCurveTo(hw, hh, hw - r, hh);
+          shape.lineTo(-hw + r, hh);
+          shape.quadraticCurveTo(-hw, hh, -hw, hh - r);
+          shape.lineTo(-hw, -hh + r);
+          shape.quadraticCurveTo(-hw, -hh, -hw + r, -hh);
+
+          const g = new THREE.ExtrudeGeometry(shape, {
+            depth: depth,
+            bevelEnabled: true,
+            bevelThickness: Math.min(0.6, depth * 0.15),
+            bevelSize: Math.min(0.8, r * 0.25),
+            bevelSegments: 2,
+          });
+          g.translate(0, 0, -depth / 2);
+          g.rotateX(-Math.PI / 2);
+          g.computeBoundingBox();
+          g.computeVertexNormals();
+          return g;
+        }
     }
   }, [type, width, height, depth, radius, modelGeometry]);
 

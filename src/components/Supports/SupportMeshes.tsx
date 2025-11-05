@@ -10,7 +10,7 @@ interface SupportMeshProps {
 const materialFor = (preview?: boolean) =>
   new THREE.MeshStandardMaterial({
     color: preview ? 0x3b82f6 : 0x6b7280,
-    transparent: preview,
+    transparent: !!preview,
     opacity: preview ? 0.5 : 1,
     roughness: 0.6,
     metalness: 0.1
@@ -65,8 +65,9 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview }) => {
       shape.closePath();
     }
     const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
-    geo.center();
-    // Move so base is at y=0
+    // Rotate so the extrude axis (Z) becomes vertical (Y)
+    geo.rotateX(Math.PI / 2);
+    // Move so base sits on y=0 (minY=0, maxY=height); placing mesh at y=0 keeps base on plate
     geo.translate(0, height / 2, 0);
     return (
       <mesh position={[center.x, 0, center.y]} rotation={[0, rotY, 0]} geometry={geo} material={materialFor(preview)} />
@@ -77,4 +78,3 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview }) => {
 };
 
 export default SupportMesh;
-
