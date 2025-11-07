@@ -5,6 +5,7 @@ import { AnySupport } from './types';
 interface SupportMeshProps {
   support: AnySupport;
   preview?: boolean;
+  baseTopY?: number;
 }
 
 const materialFor = (preview?: boolean) =>
@@ -16,10 +17,10 @@ const materialFor = (preview?: boolean) =>
     metalness: 0.1
   });
 
-const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview }) => {
+const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 0 }) => {
   const { type, height, center } = support as any;
   const rotY = (support as any).rotationZ ?? 0; // orientation for rectangular/custom
-  const yCenter = height / 2; // base at y=0, center at height/2
+  const yCenter = baseTopY + height / 2; // base sits on baseTopY
 
   if (type === 'cylindrical') {
     const { radius } = support as any;
@@ -67,10 +68,10 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview }) => {
     const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
     // Rotate so the extrude axis (Z) becomes vertical (Y)
     geo.rotateX(Math.PI / 2);
-    // Move so base sits on y=0 (minY=0, maxY=height); placing mesh at y=0 keeps base on plate
+    // Move so base sits on baseTopY (minY=baseTopY, maxY=baseTopY+height)
     geo.translate(0, height / 2, 0);
     return (
-      <mesh position={[center.x, 0, center.y]} rotation={[0, rotY, 0]} geometry={geo} material={materialFor(preview)} />
+      <mesh position={[center.x, baseTopY, center.y]} rotation={[0, rotY, 0]} geometry={geo} material={materialFor(preview)} />
     );
   }
 

@@ -10,15 +10,35 @@ interface SupportPlacementProps {
   onCreate: (support: AnySupport) => void;
   onCancel: () => void;
   defaultCenter?: THREE.Vector2;
+  raycastTargets?: THREE.Object3D[];
+  baseTopY?: number; // world Y of baseplate top (defaults to 0)
+  contactOffset?: number; // gap to keep from model contact in mm
+  maxRayHeight?: number; // max height to search above base for intersections
 }
 
 
-const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter }) => {
+const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000 }) => {
   const [center, setCenter] = React.useState<THREE.Vector2 | null>(null);
   const [previewSupport, setPreviewSupport] = React.useState<AnySupport | null>(null);
   const [dragging, setDragging] = React.useState(false);
   const [hover, setHover] = React.useState<THREE.Vector2 | null>(null);
   const [customPoints, setCustomPoints] = React.useState<THREE.Vector2[]>([]);
+  const raycasterRef = React.useRef(new THREE.Raycaster());
+
+  const computeAutoHeight = React.useCallback((cx: number, cz: number): number | null => {
+    if (!raycastTargets || raycastTargets.length === 0) return null;
+    const origin = new THREE.Vector3(cx, baseTopY + maxRayHeight, cz);
+    const dir = new THREE.Vector3(0, -1, 0);
+    const rc = raycasterRef.current;
+    rc.set(origin, dir);
+    const intersects = rc.intersectObjects(raycastTargets, true);
+    if (!intersects || intersects.length === 0) return null;
+    const hit = intersects[0];
+    const yHit = hit.point.y;
+    const h = (yHit - baseTopY) - contactOffset;
+    if (!isFinite(h)) return null;
+    return Math.max(0.5, h);
+  }, [raycastTargets, baseTopY, contactOffset, maxRayHeight]);
 
   React.useEffect(() => {
     if (!active) {
@@ -53,7 +73,8 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const dx = px - cx;
     const dz = pz - cz;
     const dist = Math.max(1, Math.hypot(dx, dz));
-    const height = Number(initParams?.height ?? 6);
+    const autoH = computeAutoHeight(cx, cz);
+    const height = autoH ?? Number(initParams?.height ?? 6);
     if (type === 'cylindrical') {
       const radius = Number(initParams?.radius ?? dist);
       return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, radius } as AnySupport;
@@ -73,9 +94,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     return { id: `sup-${Date.now()}`, type: 'custom', center: new THREE.Vector2(cx, cz), height, polygon: [[-5,-5],[5,-5],[5,5],[-5,5]] } as AnySupport;
   };
 
-  // 2D outline preview on baseplate (y≈0)
+  // 2D outline preview on baseplate top (y≈baseTopY)
   const OutlinePreview: React.FC<{ s: AnySupport }> = ({ s }) => {
-    const y = 0.02; // ensure clearly above baseplate top
+    const y = baseTopY + 0.02; // ensure clearly above baseplate top
     const color = 0x2563eb; // blue-600
     if (s.type === 'cylindrical') {
       const radius = (s as any).radius as number;
@@ -99,7 +120,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
         -hw, y,  hd, -hw, y, -hd,
       ]);
       return (
-        <lineSegments position={[s.center.x, 0, s.center.y]} renderOrder={999}>
+        <lineSegments position={[s.center.x, baseTopY, s.center.y]} renderOrder={999}>
           <bufferGeometry>
             <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
           </bufferGeometry>
@@ -122,7 +143,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       const flat = poly.flatMap(([x, z]) => [x, y, z]);
       const positions = new Float32Array([...flat, flat[0], flat[1], flat[2]]);
       return (
-        <lineLoop position={[s.center.x, 0, s.center.y]} renderOrder={999}>
+        <lineLoop position={[s.center.x, baseTopY, s.center.y]} renderOrder={999}>
           <bufferGeometry>
             <bufferAttribute attach="attributes-position" count={positions.length / 3} array={positions} itemSize={3} />
           </bufferGeometry>
@@ -142,6 +163,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     }
     if (!center) return;
     const support = toSupport(center, p);
+    // refresh height with raycast while previewing
+    const autoH = computeAutoHeight(center.x, center.y);
+    if (autoH != null) (support as any).height = autoH;
     setPreviewSupport(support);
   };
 
@@ -182,6 +206,8 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     } else {
       // second click also finalizes if not dragging
       const support = toSupport(center, p);
+      const autoH = computeAutoHeight(center.x, center.y);
+      if (autoH != null) (support as any).height = autoH;
       onCreate(support);
       setCenter(null);
       setPreviewSupport(null);
@@ -195,7 +221,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
   // XY Guides (crosshair + axes through point)
   const XYGuides: React.FC<{ point: THREE.Vector2 }> = ({ point }) => {
-    const y = 0.03;
+    const y = baseTopY + 0.03;
     const len = 2000; // extend across scene
     const px = point.x;
     const pz = point.y;
@@ -230,7 +256,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   // Custom polygon drawing preview (points + live segment). Standalone so JSX can reference it.
   const CustomPreview: React.FC = () => {
     if (type !== 'custom' || (customPoints.length === 0 && !hover)) return null;
-    const y = 0.035;
+    const y = baseTopY + 0.035;
     const pts = [...customPoints];
     if (hover) pts.push(hover.clone());
     if (pts.length < 2) {

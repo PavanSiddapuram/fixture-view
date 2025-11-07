@@ -1202,7 +1202,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       {/* Persistent supports */}
       {supports.map((s) => (
-        <SupportMesh key={s.id} support={s} />
+        <SupportMesh key={s.id} support={s} baseTopY={basePlate ? (basePlate.position?.[1] ?? 0) + (Number(basePlate.depth) || 0) / 2 : 0} />
       ))}
 
       {/* Cavity preview mesh */}
@@ -1222,6 +1222,10 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             setOrbitControlsEnabled(true);
           }}
           defaultCenter={new THREE.Vector2(modelBounds?.center.x || 0, modelBounds?.center.z || 0)}
+          raycastTargets={[modelMeshRef.current as any].filter(Boolean)}
+          baseTopY={basePlate ? (basePlate.position?.[1] ?? 0) + (Number(basePlate.depth) || 0) / 2 : 0}
+          contactOffset={Number(placing.initParams?.contactOffset ?? 0)}
+          maxRayHeight={2000}
         />
       )}
 
