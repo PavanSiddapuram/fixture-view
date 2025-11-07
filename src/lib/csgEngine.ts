@@ -26,6 +26,34 @@ export class CSGEngine {
     this.evaluator = new Evaluator();
   }
 
+  private cloneWorldGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
+    const geo = mesh.geometry.clone();
+    const m = mesh.matrixWorld.clone();
+    geo.applyMatrix4(m);
+    return geo;
+  }
+
+  private inflateGeometry(geometry: THREE.BufferGeometry, offset: number): THREE.BufferGeometry {
+    if (!offset) return geometry;
+    const geo = geometry.clone();
+    geo.computeVertexNormals();
+    const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+    const nor = geo.getAttribute('normal') as THREE.BufferAttribute;
+    const arr = pos.array as Float32Array;
+    const nArr = nor.array as Float32Array;
+    for (let i = 0; i < pos.count; i++) {
+      const ix = i * 3;
+      arr[ix] += nArr[ix] * offset;
+      arr[ix + 1] += nArr[ix + 1] * offset;
+      arr[ix + 2] += nArr[ix + 2] * offset;
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    return geo;
+  }
+
   /**
    * Create a negative space by subtracting fixture components from the base part
    */
@@ -45,33 +73,42 @@ export class CSGEngine {
       offset = 0
     } = options;
 
-    // Create a brush from the base mesh
-    const baseBrush = new Brush(baseMesh.geometry.clone());
+    const dir = removalDirection.clone().normalize();
 
-    // Create subtraction brushes from fixture components
-    const subtractionBrushes = fixtureComponents.map(mesh => {
-      const brush = new Brush(mesh.geometry.clone());
+    const baseWorld = baseMesh.matrixWorld.clone();
+    const baseWorldInv = baseWorld.clone().invert();
+    const baseGeoWorld = this.cloneWorldGeometry(baseMesh);
+    const baseBrush = new Brush(baseGeoWorld);
 
-      // Apply transformation to create the negative space
-      const matrix = new THREE.Matrix4();
-      matrix.makeTranslation(0, -depth / 2, 0); // Move down by half depth
-      matrix.multiply(new THREE.Matrix4().makeRotationFromEuler(
-        new THREE.Euler(angle * Math.PI / 180, 0, 0)
-      ));
-      brush.applyMatrix4(matrix);
+    const toolWorldGeometries: THREE.BufferGeometry[] = fixtureComponents.map((m) => this.cloneWorldGeometry(m));
+    const inflatedTools = toolWorldGeometries.map((g) => this.inflateGeometry(g, offset));
 
-      return brush;
-    });
-
-    // Perform CSG subtraction
     let resultBrush = baseBrush;
-    subtractionBrushes.forEach(brush => {
-      resultBrush = this.evaluator.evaluate(resultBrush, brush, SUBTRACTION);
+
+    inflatedTools.forEach((toolGeo) => {
+      const toolBrush = new Brush(toolGeo);
+      resultBrush = this.evaluator.evaluate(resultBrush, toolBrush, SUBTRACTION);
+
+      if (depth > 0) {
+        const sweep = toolGeo.clone();
+        const shift = new THREE.Matrix4().makeTranslation(dir.x * depth, dir.y * depth, dir.z * depth);
+        sweep.applyMatrix4(shift);
+        const sweepBrush = new Brush(sweep);
+        resultBrush = this.evaluator.evaluate(resultBrush, sweepBrush, SUBTRACTION);
+      }
     });
 
-    // Convert back to mesh
-    const resultGeometry = resultBrush.geometry;
-    const resultMesh = new THREE.Mesh(resultGeometry, baseMesh.material.clone());
+    const resultGeometryWorld = resultBrush.geometry;
+    resultGeometryWorld.applyMatrix4(baseWorldInv);
+    resultGeometryWorld.computeVertexNormals();
+    resultGeometryWorld.computeBoundingBox();
+    resultGeometryWorld.computeBoundingSphere();
+
+    const resultMesh = new THREE.Mesh(resultGeometryWorld, baseMesh.material.clone());
+    resultMesh.position.copy(baseMesh.position);
+    resultMesh.rotation.copy(baseMesh.rotation as THREE.Euler);
+    resultMesh.scale.copy(baseMesh.scale as THREE.Vector3);
+    resultMesh.updateMatrixWorld(true);
 
     return resultMesh;
   }

@@ -14,7 +14,13 @@ import {
   Eye,
   EyeOff,
   Trash2,
-  Copy
+  Copy,
+  ArrowDown,
+  ArrowUp,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUpLeft,
+  ArrowUpRight
 } from 'lucide-react';
 import * as THREE from 'three';
 import { CSGEngine, FixtureNegative, csgUtils } from '@/lib/csgEngine';
@@ -59,6 +65,50 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
 
   const handleOperationTypeChange = (type: 'subtract' | 'intersect' | 'union') => {
     setOperationState(prev => ({ ...prev, type }));
+  };
+
+  const handleRunPreview = () => {
+    if (!baseMesh || fixtureComponents.length === 0) {
+      console.warn('No base mesh or fixture components available');
+      return;
+    }
+    try {
+      const resultMesh = csgEngine.createNegativeSpace(
+        baseMesh,
+        fixtureComponents,
+        operationState.removalDirection,
+        {
+          depth: operationState.depth,
+          angle: operationState.angle,
+          offset: operationState.offset
+        }
+      );
+      onOperationComplete?.(resultMesh);
+    } catch (error) {
+      console.error('Error creating preview:', error);
+    }
+  };
+
+  const handleApply = () => {
+    if (!baseMesh || fixtureComponents.length === 0) {
+      console.warn('No base mesh or fixture components available');
+      return;
+    }
+    try {
+      const resultMesh = csgEngine.createNegativeSpace(
+        baseMesh,
+        fixtureComponents,
+        operationState.removalDirection,
+        {
+          depth: operationState.depth,
+          angle: operationState.angle,
+          offset: operationState.offset
+        }
+      );
+      window.dispatchEvent(new CustomEvent('cavity-apply', { detail: { mesh: resultMesh } }));
+    } catch (error) {
+      console.error('Error applying negative space:', error);
+    }
   };
 
   const handleParameterChange = (parameter: keyof OperationState, value: any) => {
@@ -267,6 +317,36 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
                     className="w-full"
                   />
                 </div>
+
+                <div>
+                  <label className="text-sm font-medium mb-2 block">
+                    Removal Direction
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { name: 'Down (-Y)', vec: new THREE.Vector3(0, -1, 0), Icon: ArrowDown },
+                      { name: 'Up (+Y)', vec: new THREE.Vector3(0, 1, 0), Icon: ArrowUp },
+                      { name: 'Left (-X)', vec: new THREE.Vector3(-1, 0, 0), Icon: ArrowLeft },
+                      { name: 'Right (+X)', vec: new THREE.Vector3(1, 0, 0), Icon: ArrowRight },
+                      { name: 'Back (-Z)', vec: new THREE.Vector3(0, 0, -1), Icon: ArrowUpLeft },
+                      { name: 'Forward (+Z)', vec: new THREE.Vector3(0, 0, 1), Icon: ArrowUpRight },
+                    ].map(({ name, vec, Icon }) => {
+                      const isSelected = operationState.removalDirection.equals(vec);
+                      return (
+                        <Button
+                          key={name}
+                          variant={isSelected ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => handleParameterChange('removalDirection', vec)}
+                          className="justify-start"
+                        >
+                          <Icon className="w-4 h-4 mr-2" />
+                          {name}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               <Separator />
@@ -310,11 +390,26 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
               {/* Action Buttons */}
               <div className="space-y-2">
                 <Button
+                  variant="outline"
+                  onClick={handleRunPreview}
+                  className="w-full"
+                  disabled={!baseMesh || fixtureComponents.length === 0}
+                >
+                  Run Preview
+                </Button>
+                <Button
                   onClick={handleCreateNegative}
                   className="w-full"
                   disabled={!baseMesh || fixtureComponents.length === 0}
                 >
                   Create Negative
+                </Button>
+                <Button
+                  onClick={handleApply}
+                  className="w-full"
+                  disabled={!baseMesh || fixtureComponents.length === 0}
+                >
+                  Apply
                 </Button>
 
                 <Button

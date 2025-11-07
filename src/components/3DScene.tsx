@@ -258,6 +258,7 @@ function lightenColor(hex: string, amount: number) {
   return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
 }
 
+
 function getComplementColor(hex: string) {
   const normalized = hex.replace('#', '');
   const num = parseInt(normalized, 16);
@@ -635,6 +636,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     holeDiameter?: number; // perforated / metal mounting
   } | null>(null);
   const modelMeshRef = useRef<THREE.Mesh>(null);
+  const basePlateMeshRef = useRef<THREE.Mesh>(null);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
   const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
@@ -643,6 +645,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const prevOrientationRef = useRef<ViewOrientation>('iso');
   const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
   const [supports, setSupports] = useState<AnySupport[]>([]);
+  const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
 
   const updateCamera = useCallback((orientation: ViewOrientation, bounds: BoundsSummary | null) => {
     const orthoCam = camera as THREE.OrthographicCamera;
@@ -661,7 +664,12 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       ? Math.max(bounds.size.x, bounds.size.z, crossSpan / (bounds.unitsScale ?? 1)) * (bounds.unitsScale ?? 1)
       : crossSpan;
     const verticalSpan = bounds ? bounds.size.y * (bounds.unitsScale ?? 1) : crossSpan * 0.6;
-    const padding = bounds ? Math.max(footprintPadding, 5) : footprintPadding;
+    const isIsoView = orientation === 'iso';
+    const padding = bounds
+      ? isIsoView
+        ? Math.max(footprintPadding, 5)
+        : Math.max(footprintPadding * 0.6, 2)
+      : footprintPadding;
 
     const distance = bounds
       ? Math.max(
@@ -691,7 +699,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       halfWidth = halfHeight * aspect;
     }
 
-    const framingScale = 1.22;
+    const framingScale = isIsoView ? 1.22 : 1.05;
     halfWidth *= framingScale;
     halfHeight *= framingScale;
 
@@ -705,8 +713,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     orthoCam.updateProjectionMatrix();
 
     if (controlsRef.current) {
-      controlsRef.current.target.copy(target);
-      controlsRef.current.update();
+      const c = controlsRef.current;
+      c.target.copy(target);
+      // 1D side views: lock rotation; Isometric: enable rotation
+      const isIso = orientation === 'iso';
+      c.enableRotate = isIso;
+      c.enableZoom = true;
+      c.enablePan = true;
+      // Reset constraints for iso; for 1D, keep defaults but rotation disabled anyway
+      if (isIso) {
+        c.minAzimuthAngle = -Infinity;
+        c.maxAzimuthAngle = Infinity;
+        c.minPolarAngle = 0;
+        c.maxPolarAngle = Math.PI;
+      }
+      c.update();
     }
   }, [camera, size.width, size.height]);
 
@@ -720,6 +741,68 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       setCurrentOrientation('iso');
     }
   }, [currentFile]);
+
+  // Cavity context request/dispatch
+  React.useEffect(() => {
+    const handleRequestContext = () => {
+      const base = basePlateMeshRef.current || null;
+      const model = modelMeshRef.current || null;
+      let baseMesh: THREE.Mesh | null = null;
+      let tools: THREE.Mesh[] = [];
+      if (base && model) {
+        baseMesh = base; // default: baseplate as base
+        tools = [model];
+      } else if (base) {
+        baseMesh = base;
+        tools = [];
+      } else if (model) {
+        baseMesh = model;
+        tools = [];
+      }
+      window.dispatchEvent(new CustomEvent('cavity-context', { detail: { baseMesh, fixtureComponents: tools } }));
+    };
+    window.addEventListener('request-cavity-context', handleRequestContext as EventListener);
+    return () => window.removeEventListener('request-cavity-context', handleRequestContext as EventListener);
+  }, []);
+
+  // Listen for cavity operation result to show preview
+  React.useEffect(() => {
+    const handleCavityResult = (e: CustomEvent) => {
+      const { mesh, mode } = e.detail || {};
+      if (mesh && mesh.isMesh) {
+        // Make preview material translucent
+        if (mesh.material && 'transparent' in mesh.material) {
+          (mesh.material as any).transparent = true;
+          (mesh.material as any).opacity = 0.35;
+          (mesh.material as any).depthWrite = false;
+        }
+        setCavityPreview(mesh as THREE.Mesh);
+      }
+    };
+    window.addEventListener('cavity-operation-result', handleCavityResult as EventListener);
+    return () => window.removeEventListener('cavity-operation-result', handleCavityResult as EventListener);
+  }, []);
+
+  // Apply final cavity: replace baseplate geometry and clear preview
+  React.useEffect(() => {
+    const handleApply = (e: CustomEvent) => {
+      const { mesh } = e.detail || {};
+      if (!mesh || !mesh.isMesh) return;
+      // Prefer replacing baseplate if present
+      const target = basePlateMeshRef.current || modelMeshRef.current;
+      if (target && mesh.geometry) {
+        const old = target.geometry;
+        target.geometry = mesh.geometry;
+        old?.dispose?.();
+        target.updateMatrixWorld(true, true);
+        setCavityPreview(null);
+        // notify undo system
+        window.dispatchEvent(new CustomEvent('viewer-state-changed', { detail: { type: 'cavity-apply' } }));
+      }
+    };
+    window.addEventListener('cavity-apply', handleApply as EventListener);
+    return () => window.removeEventListener('cavity-apply', handleApply as EventListener);
+  }, []);
 
   const centerCrossLength = React.useMemo(() => {
     let len = computeCrossHalfLength(modelBounds);
@@ -1053,6 +1136,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           holeDiameter={basePlate.holeDiameter}
           modelGeometry={basePlate.type === 'convex-hull' && modelMeshRef.current?.geometry ? modelMeshRef.current.geometry : undefined}
           selected={false}
+          meshRef={basePlateMeshRef}
           onSelect={() => {
             // Dispatch event to select this base plate
             window.dispatchEvent(new CustomEvent('baseplate-selected', {
@@ -1073,6 +1157,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             setColorsMap={setModelColors}
             onBoundsChange={setModelBounds}
           />
+          {/* Model selection handler */}
+          {modelMeshRef.current && (
+            <primitive
+              object={modelMeshRef.current}
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('model-selected', { detail: { mesh: modelMeshRef.current } }));
+              }}
+            />
+          )}
           <TransformAnchor
             bounds={modelBounds}
             transformEnabled={transformEnabled}
@@ -1111,6 +1204,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {supports.map((s) => (
         <SupportMesh key={s.id} support={s} />
       ))}
+
+      {/* Cavity preview mesh */}
+      {cavityPreview && (
+        <primitive object={cavityPreview} />
+      )}
 
       {/* Support placement controller */}
       {placing.active && (

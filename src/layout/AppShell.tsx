@@ -8,6 +8,7 @@ import VerticalToolbar from "@/components/VerticalToolbar";
 import ThreeDViewer from "@/components/3DViewer";
 import BaseplateDialog from "@/components/BaseplateDialog";
 import SupportsPanel from "@/components/Supports/SupportsPanel";
+import BooleanOperationsPanel from "@/components/BooleanOperationsPanel";
 import { ProcessedFile } from "@/modules/FileImport/types";
 import {
   Cpu,
@@ -17,9 +18,6 @@ import {
   Ruler,
   Grid3X3,
   RotateCcw,
-  Square,
-  Circle,
-  Move3D,
   ChevronLeft,
   ChevronRight,
   Scale,
@@ -32,6 +30,53 @@ import {
   LogOut,
   Zap
 } from "lucide-react";
+
+// Small perspective cube icons matching the reference style
+const IconIsoFace: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    {/* top diamond */}
+    <polygon points="12,4 19,8 12,12 5,8" fill="none" />
+    {/* left face */}
+    <polygon points="5,8 12,12 12,20 5,16" fill="none" />
+    {/* right face (filled) */}
+    <polygon points="19,8 12,12 12,20 19,16" fill="currentColor" />
+    {/* edges */}
+    <polyline points="5,8 12,12 19,8" />
+    <polyline points="5,16 12,20 19,16" />
+    <line x1="12" y1="12" x2="12" y2="20" />
+  </svg>
+);
+
+const IconIsoTop: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    {/* top diamond (filled) */}
+    <polygon points="12,4 19,8 12,12 5,8" fill="currentColor" />
+    {/* side outlines */}
+    <polygon points="5,8 12,12 12,20 5,16" fill="none" />
+    <polygon points="19,8 12,12 12,20 19,16" fill="none" />
+    <polyline points="5,16 12,20 19,16" />
+    <line x1="12" y1="12" x2="12" y2="20" />
+  </svg>
+);
+
+const IconTopFace: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polygon points="12,6 18,10 12,14 6,10" fill="currentColor" />
+    <polygon points="6,10 12,14 18,10 12,6 6,10" fill="none" />
+  </svg>
+);
+
+// Left face filled variant
+const IconIsoLeftFace: React.FC<{ className?: string }> = ({ className }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polygon points="12,4 19,8 12,12 5,8" fill="none" />
+    <polygon points="5,8 12,12 12,20 5,16" fill="currentColor" />
+    <polygon points="19,8 12,12 12,20 19,16" fill="none" />
+    <polyline points="5,8 12,12 19,8" />
+    <polyline points="5,16 12,20 19,16" />
+    <line x1="12" y1="12" x2="12" y2="20" />
+  </svg>
+);
 
 export interface AppShellHandle {
   openFilePicker: () => void;
@@ -57,12 +102,15 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
   ({ children, onLogout, onToggleDesignMode, designMode = false, isProcessing = false, fileStats, currentFile }, ref) => {
     const [isBaseplateDialogOpen, setIsBaseplateDialogOpen] = useState(false);
     const [isSupportsOpen, setIsSupportsOpen] = useState(false);
+    const [isCavityOpen, setIsCavityOpen] = useState(false);
     const [isFileImportCollapsed, setIsFileImportCollapsed] = useState(false);
     const [isPropertiesCollapsed, setIsPropertiesCollapsed] = useState(false);
     const [undoStack, setUndoStack] = useState<any[]>([]);
     const [redoStack, setRedoStack] = useState<any[]>([]);
     const [transformEnabled, setTransformEnabled] = useState(false);
     const [currentBaseplate, setCurrentBaseplate] = useState<{ id: string; type: string } | null>(null);
+    const [cavityBaseMesh, setCavityBaseMesh] = useState<any | null>(null);
+    const [cavityTools, setCavityTools] = useState<any[]>([]);
 
     const handleOpenFilePicker = () => {
       const input = document.createElement('input');
@@ -143,6 +191,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
           return;
         case 'cavity':
           window.dispatchEvent(new CustomEvent('open-cavity-dialog'));
+          // ask scene to provide current meshes for cavity
+          setTimeout(() => window.dispatchEvent(new CustomEvent('request-cavity-context')), 0);
           return;
         case 'clamps':
           window.dispatchEvent(new CustomEvent('open-clamps-dialog'));
@@ -175,6 +225,24 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
       const onOpenSupports = () => setIsSupportsOpen(true);
       window.addEventListener('open-supports-dialog', onOpenSupports as EventListener);
       return () => window.removeEventListener('open-supports-dialog', onOpenSupports as EventListener);
+    }, []);
+
+    // Listen for cavity (boolean ops) open event
+    React.useEffect(() => {
+      const onOpenCavity = () => setIsCavityOpen(true);
+      window.addEventListener('open-cavity-dialog', onOpenCavity as EventListener);
+      return () => window.removeEventListener('open-cavity-dialog', onOpenCavity as EventListener);
+    }, []);
+
+    // Listen for cavity context from scene
+    React.useEffect(() => {
+      const onCavityContext = (e: CustomEvent) => {
+        const { baseMesh, fixtureComponents } = e.detail || {};
+        setCavityBaseMesh(baseMesh || null);
+        setCavityTools(Array.isArray(fixtureComponents) ? fixtureComponents : []);
+      };
+      window.addEventListener('cavity-context', onCavityContext as EventListener);
+      return () => window.removeEventListener('cavity-context', onCavityContext as EventListener);
     }, []);
 
     // Record support creations to undo stack
@@ -314,7 +382,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Front View"
               >
-                <Square className="w-4 h-4" />
+                <IconIsoFace className="w-4 h-4" />
               </Button>
               <Button
                 variant="ghost"
@@ -324,7 +392,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Back View"
               >
-                <Square className="w-4 h-4 rotate-180" />
+                <IconIsoFace className="w-4 h-4 rotate-180" />
               </Button>
               <Button
                 variant="ghost"
@@ -334,7 +402,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Left View"
               >
-                <Square className="w-4 h-4 -rotate-90" />
+                <IconIsoLeftFace className="w-4 h-4" />
               </Button>
               <Button
                 variant="ghost"
@@ -344,7 +412,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Right View"
               >
-                <Square className="w-4 h-4 rotate-90" />
+                <IconIsoFace className="w-4 h-4" />
               </Button>
               <Button
                 variant="ghost"
@@ -354,7 +422,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Top View"
               >
-                <Circle className="w-4 h-4" />
+                <IconTopFace className="w-4 h-4" />
               </Button>
               <Button
                 variant="ghost"
@@ -364,7 +432,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 disabled={isProcessing}
                 title="Isometric View"
               >
-                <Move3D className="w-4 h-4" />
+                <IconIsoTop className="w-4 h-4" />
               </Button>
             </div>
 
@@ -445,6 +513,8 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                 size={150}
               />
             </div>
+
+            {/* Cavity panel moved under Properties pane */}
           </main>
 
           {/* Right Properties Panel */}
@@ -476,7 +546,7 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
             </div>
 
             {!isPropertiesCollapsed && (
-              <div className="p-4 flex-1">
+              <div className="p-4 flex-1 overflow-auto">
                 {fileStats ? (
                   <div className="space-y-2 text-xs font-tech">
                     <div className="flex justify-between">
@@ -502,6 +572,25 @@ const AppShell = forwardRef<AppShellHandle, AppShellProps>(
                   <p className="text-xs text-muted-foreground font-tech">
                     No file loaded
                   </p>
+                )}
+
+                {/* Subtract Workpieces panel anchored here */}
+                {isCavityOpen && (
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="font-tech text-sm font-semibold">Subtract Workpieces</div>
+                      <Button size="sm" variant="ghost" onClick={() => setIsCavityOpen(false)} className="w-8 h-8 p-0">×</Button>
+                    </div>
+                    <BooleanOperationsPanel
+                      baseMesh={cavityBaseMesh}
+                      fixtureComponents={cavityTools}
+                      onOperationComplete={(mesh:any) => {
+                        // Forward to scene as preview/apply result
+                        window.dispatchEvent(new CustomEvent('cavity-operation-result', { detail: { mesh, mode: 'preview' } }));
+                      }}
+                      onNegativeCreate={() => { /* history UI already in panel */ }}
+                    />
+                  </div>
                 )}
               </div>
             )}

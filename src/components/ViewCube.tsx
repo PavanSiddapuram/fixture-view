@@ -14,8 +14,13 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
   const cameraRef = useRef<THREE.Camera>();
   const cubeRef = useRef<THREE.Group>();
   const [hoveredFace, setHoveredFace] = useState<string | null>(null);
+  const [hoveredArrow, setHoveredArrow] = useState<string | null>(null);
+  const [activeFace, setActiveFace] = useState<string | null>(null);
+  const faceOverlayMatsRef = useRef<Record<string, THREE.MeshBasicMaterial>>({});
+  const faceOutlineMatsRef = useRef<Record<string, THREE.LineBasicMaterial>>({});
   const edgeMaterialRef = useRef<THREE.LineBasicMaterial | null>(null);
-  const arrowMaterialRef = useRef<THREE.MeshBasicMaterial | null>(null);
+  const arrowMatsRef = useRef<Record<string, THREE.MeshBasicMaterial>>({});
+  const overlayRef = useRef<THREE.Group | null>(null);
 
   useEffect(() => {
 
@@ -34,6 +39,10 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
 
     // Cube setup
     const cubeGroup = new THREE.Group();
+    // Overlay group for UI (arcs + arrows) that stays in screen plane
+    const overlayGroup = new THREE.Group();
+    overlayGroup.renderOrder = 1000;
+    overlayRef.current = overlayGroup;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
 
     // Create visible cube faces with white material
@@ -70,10 +79,10 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const edgeLines = new THREE.LineSegments(
       edges,
       new THREE.LineBasicMaterial({ 
-        color: 0x4d4d4d, 
+        color: 0x8a8a8a, 
         transparent: true, 
         opacity: 1,
-        linewidth: 3  // Make edges thicker
+        linewidth: 2.5  // outer
       })
     );
     edgeLines.scale.set(1.2, 1.2, 1.2); // Match cube scaling
@@ -88,10 +97,10 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     const innerLines = new THREE.LineSegments(
       innerEdges,
       new THREE.LineBasicMaterial({ 
-        color: 0x4d4d4d, 
+        color: 0xbdbdbd, 
         transparent: true, 
-        opacity: 1,
-        linewidth: 2  // Make inner edges slightly thinner
+        opacity: 0.9,
+        linewidth: 1.25  // inner
       })
     );
     innerLines.scale.set(0.85, 0.85, 0.85);
@@ -116,16 +125,20 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     ];
     // All labels are rendered; depth testing hides back faces naturally
     
-    labelTexts.forEach((text, index) => {
+    labelTexts.forEach((t, index) => {
       const canvas = document.createElement('canvas');
       const context = canvas.getContext('2d')!;
       canvas.width = 128;
       canvas.height = 128;
       
-      context.fillStyle = '#000000';
-      context.font = '500 36px system-ui';
+      context.fillStyle = '#111111';
+      context.strokeStyle = 'rgba(0,0,0,0.35)';
+      context.lineWidth = 3;
+      context.font = '600 40px system-ui';
       context.textAlign = 'center';
       context.textBaseline = 'middle';
+      const text = String(t || '').toUpperCase();
+      context.strokeText(text, 64, 64);
       context.fillText(text, 64, 64);
       
       const texture = new THREE.CanvasTexture(canvas);
@@ -136,62 +149,69 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       const spriteMaterial = new THREE.SpriteMaterial({ 
         map: texture, 
         transparent: true,
-        opacity: 1,
         depthTest: true,
-        depthWrite: false
+        depthWrite: false,
       });
       const sprite = new THREE.Sprite(spriteMaterial);
       sprite.position.copy(labelPositions[index]);
       sprite.position.multiplyScalar(1.2); // Scale label positions to match cube scaling
       sprite.position.y -= 0.1; // Apply cube positioning to labels
-      sprite.scale.set(0.32, 0.32, 1); // Slightly smaller scale for better fit
+      sprite.scale.set(0.42, 0.42, 1); // Larger for legibility
       sprite.renderOrder = 1000;
       sprite.frustumCulled = false;
       cubeGroup.add(sprite);
     });
 
-    // Remove decorative arcs - cleaner look without them
-    // const makeArc = (radius: number, start: number, end: number, segments = 32) => {
-    //   const pts: THREE.Vector3[] = [];
-    //   for (let i = 0; i <= segments; i++) {
-    //     const t = start + (end - start) * (i / segments);
-    //     const x = Math.cos(t) * radius;
-    //     const z = Math.sin(t) * radius;
-    //     pts.push(new THREE.Vector3(x, 0, z));
-    //   }
-    //   const geom = new THREE.BufferGeometry().setFromPoints(pts);
-    //   const mat = new THREE.LineBasicMaterial({ color: 0x666666, transparent: false, opacity: 1, depthTest: false });
-    //   const line = new THREE.Line(geom, mat);
-    //   line.renderOrder = 1000;
-    //   return line;
-    // };
-    // const arcLeft = makeArc(1.4, Math.PI * 0.7, Math.PI * 1.0);
-    // const arcRight = makeArc(1.4, -Math.PI * 0.1, Math.PI * 0.3);
-    // arcLeft.position.y = 1.1;
-    // arcRight.position.y = 1.1;
-    // cubeGroup.add(arcLeft);
-    // cubeGroup.add(arcRight);
+    // Curved arc guides (fixed in screen plane, overlay)
+    const makeArc = (radius: number, start: number, end: number, segments = 48) => {
+      const pts: THREE.Vector3[] = [];
+      for (let i = 0; i <= segments; i++) {
+        const t = start + (end - start) * (i / segments);
+        const x = Math.cos(t) * radius;
+        const y = Math.sin(t) * radius;
+        // Draw in screen plane (x,y,0) so curvature is visible when overlay is camera-aligned
+        pts.push(new THREE.Vector3(x, y, 0));
+      }
+      const geom = new THREE.BufferGeometry().setFromPoints(pts);
+      const mat = new THREE.LineBasicMaterial({ color: 0x9ca3af, transparent: true, opacity: 0.9, depthTest: false });
+      const line = new THREE.Line(geom, mat);
+      line.renderOrder = 1000;
+      (line as any).frustumCulled = false;
+      return line;
+    };
+    const arcLeft = makeArc(1.1, Math.PI * 0.60, Math.PI * 0.95);
+    const arcRight = makeArc(1.1, Math.PI * 0.05, Math.PI * 0.40);
+    arcLeft.position.y = 0.95;
+    arcRight.position.y = 0.95;
+    overlayGroup.add(arcLeft);
+    overlayGroup.add(arcRight);
 
-    // Corner arrows as small triangles near corners (screen plane-ish)
-    const arrowMat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
-    const tri = new THREE.ConeGeometry(0.07, 0.18, 3);
-    const arrows: { mesh: THREE.Mesh; id: string }[] = [];
+    // Corner/side arrows as cones (as per reference), in overlay screen plane
+    const arrows: { mesh: THREE.Mesh; id: string; mat: THREE.MeshBasicMaterial }[] = [];
+    const coneGeom = new THREE.ConeGeometry(0.14, 0.34, 24);
     const addArrow = (id: string, pos: THREE.Vector3, rot: THREE.Euler) => {
-      const m = new THREE.Mesh(tri, arrowMat);
+      const mat = new THREE.MeshBasicMaterial({ color: 0x666666, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false, side: THREE.DoubleSide });
+      const m = new THREE.Mesh(coneGeom, mat);
       m.position.copy(pos);
-      m.position.y -= 0.1; // Apply cube positioning to arrows
+      // Keep arrows in overlay group (screen plane)
       m.rotation.copy(rot);
-      m.renderOrder = 999;
-      cubeGroup.add(m);
-      arrows.push({ mesh: m, id });
+      m.renderOrder = 1500;
+      (m as any).frustumCulled = false;
+      overlayGroup.add(m);
+      arrows.push({ mesh: m, id, mat });
+      arrowMatsRef.current[id] = mat;
     };
     // Place arrows with a gap away from the cube on 4 sides
-    const gap = 1.25 * 1.2; // distance from center, scaled to match cube
+    const gap = 1.25; // further from cube, still within ortho frustum (±1.5)
     addArrow('right', new THREE.Vector3(gap, 0, 0), new THREE.Euler(0, 0, -Math.PI / 2));   // +X
     addArrow('left', new THREE.Vector3(-gap, 0, 0), new THREE.Euler(0, 0, Math.PI / 2));   // -X
     addArrow('top', new THREE.Vector3(0, gap, 0), new THREE.Euler(0, 0, 0));               // +Y
     addArrow('bottom', new THREE.Vector3(0, -gap, 0), new THREE.Euler(Math.PI, 0, 0));     // -Y
-    arrowMaterialRef.current = arrowMat;
+    // store mats per id in arrowMatsRef (already filled during addArrow)
+
+    // Parent overlay to camera so it stays screen-aligned and always visible
+    camera.add(overlayGroup);
+    scene.add(camera);
 
     scene.add(cubeGroup);
     camera.position.set(3, 3, 3);
@@ -201,6 +221,76 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     rendererRef.current = renderer;
     cameraRef.current = camera;
     cubeRef.current = cubeGroup;
+
+    // Add subtle face highlight overlays (hover/active)
+    const faces: Array<{ name: string; normal: THREE.Vector3; up: THREE.Vector3 }> = [
+      { name: 'right', normal: new THREE.Vector3( 1, 0, 0), up: new THREE.Vector3(0, 1, 0) },
+      { name: 'left',  normal: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, 1, 0) },
+      { name: 'top',   normal: new THREE.Vector3( 0, 1, 0), up: new THREE.Vector3(0, 0, 1) },
+      { name: 'bottom',normal: new THREE.Vector3( 0,-1, 0), up: new THREE.Vector3(0, 0, 1) },
+      { name: 'front', normal: new THREE.Vector3( 0, 0, 1), up: new THREE.Vector3(0, 1, 0) },
+      { name: 'back',  normal: new THREE.Vector3( 0, 0,-1), up: new THREE.Vector3(0, 1, 0) },
+    ];
+    const overlaySize = 0.9; // slightly inset
+    faces.forEach(f => {
+      const mat = new THREE.MeshBasicMaterial({ color: 0x0891b2, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const plane = new THREE.PlaneGeometry(overlaySize, overlaySize);
+      const overlay = new THREE.Mesh(plane, mat);
+
+      // Orient overlay to face and position slightly above face
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), f.normal.clone());
+      overlay.quaternion.copy(q);
+      overlay.position.copy(f.normal.clone().multiplyScalar(0.51));
+      overlay.scale.set(1.0, 1.0, 1.0);
+      // match group transform and add to scene
+      overlay.position.multiplyScalar(1.2);
+      overlay.position.y -= 0.1;
+      overlay.renderOrder = 2;
+      cubeGroup.add(overlay);
+      faceOverlayMatsRef.current[f.name] = mat;
+
+      // Active outline rectangle over the same face
+      const half = overlaySize / 2;
+      const outlineGeom = new THREE.BufferGeometry();
+      const outlinePositions = new Float32Array([
+        -half, -half, 0,   half, -half, 0,
+         half, -half, 0,   half,  half, 0,
+         half,  half, 0,  -half,  half, 0,
+        -half,  half, 0,  -half, -half, 0,
+      ]);
+      outlineGeom.setAttribute('position', new THREE.BufferAttribute(outlinePositions, 3));
+      const outlineMat = new THREE.LineBasicMaterial({ color: 0x0891b2, transparent: true, opacity: 0, depthTest: true, depthWrite: false });
+      const outline = new THREE.LineSegments(outlineGeom, outlineMat);
+      outline.quaternion.copy(overlay.quaternion);
+      outline.position.copy(overlay.position);
+      outline.position.multiplyScalar(1.0);
+      outline.renderOrder = 3;
+      cubeGroup.add(outline);
+      faceOutlineMatsRef.current[f.name] = outlineMat;
+
+      // Corner squares at face rectangle corners (visible faces only via depth test)
+      const cornerSize = 0.09;
+      const cornerGeom = new THREE.PlaneGeometry(cornerSize, cornerSize);
+      const cornerMat = new THREE.MeshBasicMaterial({ color: 0xd1d5db, transparent: true, opacity: 0.95, depthTest: true, depthWrite: false });
+      const corners = new THREE.Group();
+      corners.quaternion.copy(overlay.quaternion);
+      corners.position.copy(overlay.position);
+      // Use existing 'half' from above for corner placement
+      const cpos = [
+        new THREE.Vector3(-half, -half, 0),
+        new THREE.Vector3( half, -half, 0),
+        new THREE.Vector3( half,  half, 0),
+        new THREE.Vector3(-half,  half, 0),
+      ];
+      cpos.forEach(p => {
+        const sq = new THREE.Mesh(cornerGeom, cornerMat.clone());
+        sq.position.copy(p);
+        sq.renderOrder = 3;
+        corners.add(sq);
+      });
+      corners.position.multiplyScalar(1.0);
+      cubeGroup.add(corners);
+    });
 
     // Raycaster for mouse interaction
     const raycaster = new THREE.Raycaster();
@@ -233,12 +323,26 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
         const intersects = raycaster.intersectObjects([interactionCube, ...arrows.map(a => a.mesh)]);
 
         if (intersects.length > 0) {
-          const faceIndex = intersects[0].face?.materialIndex;
-          const faceNames = ['right', 'left', 'top', 'bottom', 'front', 'back'];
-          setHoveredFace(faceNames[faceIndex || 0]);
+          const obj = intersects[0].object;
+          if (obj === interactionCube) {
+            const faceIndex = intersects[0].face?.materialIndex;
+            const faceNames = ['right', 'left', 'top', 'bottom', 'front', 'back'];
+            setHoveredFace(faceNames[faceIndex || 0]);
+            setHoveredArrow(null);
+          } else {
+            const arrow = arrows.find(a => a.mesh === obj);
+            if (arrow) {
+              setHoveredArrow(arrow.id);
+              setHoveredFace(null);
+            } else {
+              setHoveredArrow(null);
+              setHoveredFace(null);
+            }
+          }
           renderer.domElement.style.cursor = 'pointer';
         } else {  
           setHoveredFace(null);
+          setHoveredArrow(null);
           renderer.domElement.style.cursor = 'default';
         }
       }
@@ -333,6 +437,7 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     // Animation loop
     const animate = () => {
       requestAnimationFrame(animate);
+      // overlayGroup is parented to camera; no per-frame quaternion copy needed
       renderer.render(scene, camera);
     };
     animate();
@@ -345,6 +450,19 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
       // This makes labeled faces align with selected views consistently, including isometric.
       const q = new THREE.Quaternion(x, y, z, w).invert();
       cubeGroup.setRotationFromQuaternion(q);
+      // Determine active face from camera orientation (choose major axis of camera forward)
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(x, y, z, w));
+      const comps = [
+        { n: 'front', v:  forward.z },
+        { n: 'back',  v: -forward.z },
+        { n: 'right', v:  forward.x },
+        { n: 'left',  v: -forward.x },
+        { n: 'top',   v:  forward.y },
+        { n: 'bottom',v: -forward.y },
+      ];
+      const max = comps.reduce((a, b) => (b.v > a.v ? b : a));
+      // Add tolerance to avoid flicker near diagonals
+      if (max.v > 0.35) setActiveFace(max.n);
     };
 
     window.addEventListener('viewer-camera-changed', handleCameraChanged as EventListener);
@@ -361,17 +479,36 @@ const ViewCube: React.FC<ViewCubeProps> = ({ onViewChange, className = '', size 
     };
   }, [onViewChange]);
 
-  // Hover styling: slightly darken edges and arrows when hovering a face
+  // Hover styling: slightly darken edges; tint the hovered arrow only
   useEffect(() => {
     if (edgeMaterialRef.current) {
       edgeMaterialRef.current.color.set(hoveredFace ? 0x333333 : 0x666666);
     }
-    if (arrowMaterialRef.current) {
-      arrowMaterialRef.current.color.set(hoveredFace ? 0x444444 : 0x666666);
-      arrowMaterialRef.current.opacity = hoveredFace ? 1 : 0.95;
-      arrowMaterialRef.current.needsUpdate = true;
-    }
-  }, [hoveredFace]);
+    const mats = arrowMatsRef.current;
+    Object.entries(mats).forEach(([id, mat]) => {
+      const isHovered = hoveredArrow === id;
+      mat.color.set(isHovered ? 0x3b82f6 : 0x666666);
+      mat.opacity = isHovered ? 1 : 0.95;
+      mat.needsUpdate = true;
+    });
+  }, [hoveredFace, hoveredArrow]);
+
+  // Update face overlay materials
+  useEffect(() => {
+    const mats = faceOverlayMatsRef.current;
+    Object.keys(mats).forEach(key => {
+      const mat = mats[key];
+      if (!mat) return;
+      if (activeFace === key) {
+        mat.opacity = 0.6;
+      } else if (hoveredFace === key) {
+        mat.opacity = 0.35;
+      } else {
+        mat.opacity = 0;
+      }
+      mat.needsUpdate = true;
+    });
+  }, [hoveredFace, activeFace]);
 
   return (
     <div

@@ -19,6 +19,7 @@ interface BasePlateProps {
   onPointerDown?: (e: any) => void;
   onPointerMove?: (e: any) => void;
   onPointerUp?: (e: any) => void;
+  meshRef?: React.RefObject<THREE.Mesh>;
 }
 
 const BasePlate: React.FC<BasePlateProps> = ({
@@ -35,9 +36,11 @@ const BasePlate: React.FC<BasePlateProps> = ({
   oversizeXY = 10,
   pitch = 20,
   holeDiameter = 6
-  , onPointerDown, onPointerMove, onPointerUp
+  , onPointerDown, onPointerMove, onPointerUp,
+  meshRef: externalMeshRef
 }) => {
-  const meshRef = useRef<THREE.Mesh>(null);
+  const internalMeshRef = useRef<THREE.Mesh>(null);
+  const meshRef = externalMeshRef || internalMeshRef;
   const groupRef = useRef<THREE.Group>(null);
 
   // Material properties based on type (with transparency for perforated panels)
