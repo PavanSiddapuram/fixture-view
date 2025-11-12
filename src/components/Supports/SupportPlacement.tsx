@@ -1,7 +1,8 @@
 import React from 'react';
 import * as THREE from 'three';
 import { Html } from '@react-three/drei';
-import { AnySupport, SupportType } from './types';
+import { AnySupport, SupportType, RectSupport, CylSupport, ConicalSupport } from './types';
+import { computeSupportMetrics as evaluateSupportMetrics } from './metrics';
 
 interface SupportPlacementProps {
   active: boolean;
@@ -14,54 +15,66 @@ interface SupportPlacementProps {
   baseTopY?: number; // world Y of baseplate top (defaults to 0)
   contactOffset?: number; // gap to keep from model contact in mm
   maxRayHeight?: number; // max height to search above base for intersections
+  baseTarget?: THREE.Object3D | null; // actual baseplate mesh for local baseY
 }
 
 
-const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000 }) => {
+
+
+const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initParams, onCreate, onCancel, defaultCenter, raycastTargets = [], baseTopY = 0, contactOffset = 0, maxRayHeight = 2000, baseTarget = null }) => {
   const [center, setCenter] = React.useState<THREE.Vector2 | null>(null);
   const [previewSupport, setPreviewSupport] = React.useState<AnySupport | null>(null);
   const [dragging, setDragging] = React.useState(false);
   const [hover, setHover] = React.useState<THREE.Vector2 | null>(null);
   const [customPoints, setCustomPoints] = React.useState<THREE.Vector2[]>([]);
+  const [drawingCustom, setDrawingCustom] = React.useState(false);
   const raycasterRef = React.useRef(new THREE.Raycaster());
 
-  const computeAutoHeight = React.useCallback((cx: number, cz: number): number | null => {
-    if (!raycastTargets || raycastTargets.length === 0) return null;
-    const origin = new THREE.Vector3(cx, baseTopY + maxRayHeight, cz);
-    const dir = new THREE.Vector3(0, -1, 0);
-    const rc = raycasterRef.current;
-    rc.set(origin, dir);
-    const intersects = rc.intersectObjects(raycastTargets, true);
-    if (!intersects || intersects.length === 0) return null;
-    const hit = intersects[0];
-    const yHit = hit.point.y;
-    const h = (yHit - baseTopY) - contactOffset;
-    if (!isFinite(h)) return null;
-    return Math.max(0.5, h);
-  }, [raycastTargets, baseTopY, contactOffset, maxRayHeight]);
+  const computeMetrics = React.useCallback(
+    (s: AnySupport) =>
+      evaluateSupportMetrics({
+        support: s,
+        baseTopY,
+        contactOffset,
+        baseTarget,
+        modelTargets: raycastTargets,
+        maxRayHeight,
+        raycaster: raycasterRef.current,
+      }),
+    [baseTopY, contactOffset, baseTarget, raycastTargets, maxRayHeight]
+  );
 
-  React.useEffect(() => {
-    if (!active) {
-      setCenter(null);
-      setPreviewSupport(null);
-      setHover(null);
-      setCustomPoints([]);
-      return;
+  const closeThreshold = 5;
+
+  const finalizeCustomSupport = React.useCallback((points: THREE.Vector2[]) => {
+    if (points.length < 3) return;
+    const pts = points.map(p => p.clone());
+    const cx = pts.reduce((sum, v) => sum + v.x, 0) / pts.length;
+    const cz = pts.reduce((sum, v) => sum + v.y, 0) / pts.length;
+    const centerV = new THREE.Vector2(cx, cz);
+    const polygon = pts.map(v => [v.x - cx, v.y - cz] as [number, number]);
+    const baseHeight = Number(initParams?.height ?? 6);
+    const support = {
+      id: `sup-${Date.now()}`,
+      type: 'custom',
+      center: centerV,
+      height: baseHeight,
+      polygon,
+      contactOffset,
+    } as AnySupport;
+    const metrics = computeMetrics(support);
+    if (metrics) {
+      support.height = metrics.height;
+      (support as any).baseY = metrics.baseY;
     }
-  }, [active]);
-
-  React.useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => {
-      if (!active) return;
-      if (e.key === 'Escape') {
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', onEsc);
-    return () => window.removeEventListener('keydown', onEsc);
-  }, [active, onCancel]);
-
-  if (!active || !type) return null;
+    onCreate(support);
+    setCustomPoints([]);
+    setCenter(null);
+    setPreviewSupport(null);
+    setHover(null);
+    setDrawingCustom(false);
+    setDragging(false);
+  }, [computeMetrics, initParams, onCreate, contactOffset]);
 
   const toSupport = (c: THREE.Vector2, cursor: THREE.Vector3): AnySupport => {
     const snap = 1; // mm grid for higher precision
@@ -73,31 +86,54 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const dx = px - cx;
     const dz = pz - cz;
     const dist = Math.max(1, Math.hypot(dx, dz));
-    const autoH = computeAutoHeight(cx, cz);
-    const height = autoH ?? Number(initParams?.height ?? 6);
+    const footprint = { id: 'tmp', type: type as any, center: c.clone(), height: 0 } as AnySupport;
+    if (type === 'rectangular') {
+      const rectangularFootprint = footprint as RectSupport;
+      rectangularFootprint.width = Number(initParams?.width ?? Math.abs(dx) * 2);
+      rectangularFootprint.depth = Number(initParams?.depth ?? Math.abs(dz) * 2);
+      rectangularFootprint.cornerRadius = Number(initParams?.cornerRadius ?? 0);
+    } else if (type === 'cylindrical') {
+      (footprint as CylSupport).radius = Number(initParams?.radius ?? dist);
+    } else if (type === 'conical') {
+      const conicalFootprint = footprint as ConicalSupport;
+      conicalFootprint.baseRadius = Number(initParams?.baseRadius ?? dist);
+      conicalFootprint.topRadius = Number(initParams?.topRadius ?? 0);
+    }
+    const metrics = computeMetrics(footprint);
+    const height = metrics?.height ?? Number(initParams?.height ?? 6);
+    const baseY = metrics?.baseY ?? baseTopY;
     if (type === 'cylindrical') {
       const radius = Number(initParams?.radius ?? dist);
-      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, radius } as AnySupport;
+      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, radius, baseY, contactOffset } as AnySupport;
     }
     if (type === 'rectangular') {
       const width = Number(initParams?.width ?? Math.abs(dx) * 2);
       const depth = Number(initParams?.depth ?? Math.abs(dz) * 2);
       const cornerRadius = Number(initParams?.cornerRadius ?? 0);
-      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, width, depth, cornerRadius } as AnySupport;
+      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, width, depth, cornerRadius, baseY, contactOffset } as AnySupport;
     }
     if (type === 'conical') {
       const baseRadius = Number(initParams?.baseRadius ?? dist);
       const topRadius = Number(initParams?.topRadius ?? 0);
-      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, baseRadius, topRadius } as AnySupport;
+      return { id: `sup-${Date.now()}`, type, center: new THREE.Vector2(cx, cz), height, baseRadius, topRadius, baseY, contactOffset } as AnySupport;
     }
     // custom placeholder
-    return { id: `sup-${Date.now()}`, type: 'custom', center: new THREE.Vector2(cx, cz), height, polygon: [[-5,-5],[5,-5],[5,5],[-5,5]] } as AnySupport;
+    return { id: `sup-${Date.now()}`, type: 'custom', center: new THREE.Vector2(cx, cz), height, polygon: [[-5,-5],[5,-5],[5,5],[-5,5]], baseY, contactOffset } as AnySupport;
   };
 
-  // 2D outline preview on baseplate top (y≈baseTopY)
+  React.useEffect(() => {
+    if (!active) {
+      setCenter(null);
+      setPreviewSupport(null);
+      setHover(null);
+      setCustomPoints([]);
+      return;
+    }
+  }, [active]);
+
   const OutlinePreview: React.FC<{ s: AnySupport }> = ({ s }) => {
-    const y = baseTopY + 0.02; // ensure clearly above baseplate top
-    const color = 0x2563eb; // blue-600
+    const y = baseTopY + 0.02;
+    const color = 0x2563eb;
     if (s.type === 'cylindrical') {
       const radius = (s as any).radius as number;
       const thickness = Math.max(radius * 0.02, 0.6);
@@ -129,7 +165,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       );
     }
     if (s.type === 'conical') {
-      const radius = (s as any).baseRadius as number; // base circle only
+      const radius = (s as any).baseRadius as number;
       const thickness = Math.max(radius * 0.02, 0.6);
       return (
         <mesh position={[s.center.x, y, s.center.y]} rotation={[-Math.PI / 2, 0, 0]} renderOrder={999}>
@@ -156,16 +192,27 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
   const handlePointerMove = (e: any) => {
     const p = e.point as THREE.Vector3;
-    setHover(new THREE.Vector2(p.x, p.z));
+    const planePoint = new THREE.Vector2(p.x, p.z);
+    setHover(planePoint.clone());
     if (type === 'custom') {
-      // live preview is handled by CustomPreview below
+      if (drawingCustom && customPoints.length >= 1) {
+        setCustomPoints(prev => {
+          if (prev.length === 0) return prev;
+          const next = [...prev];
+          next[next.length - 1] = planePoint.clone();
+          return next;
+        });
+      }
       return;
     }
     if (!center) return;
     const support = toSupport(center, p);
-    // refresh height with raycast while previewing
-    const autoH = computeAutoHeight(center.x, center.y);
-    if (autoH != null) (support as any).height = autoH;
+    if (!support) return;
+    const metrics = computeMetrics(support);
+    if (metrics) {
+      (support as any).height = metrics.height;
+      (support as any).baseY = metrics.baseY;
+    }
     setPreviewSupport(support);
   };
 
@@ -174,30 +221,13 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const p = e.point as THREE.Vector3; // on plane y=0
     if (type === 'custom') {
       const pt = new THREE.Vector2(p.x, p.z);
-      // Close if near first point and at least 3 points
-      if (customPoints.length >= 3) {
-        const first = customPoints[0];
-        const dist = first.distanceTo(pt);
-        if (dist <= 5) {
-          // finalize polygon
-          const pts = [...customPoints];
-          // compute centroid
-          const cx = pts.reduce((s,v)=>s+v.x,0)/pts.length;
-          const cz = pts.reduce((s,v)=>s+v.y,0)/pts.length;
-          const centerV = new THREE.Vector2(cx, cz);
-          const polygon = pts.map(v=>[v.x - cx, v.y - cz] as [number, number]);
-          const height = Number(initParams?.height ?? 6);
-          const support = { id: `sup-${Date.now()}`, type: 'custom', center: centerV, height, polygon } as AnySupport;
-          onCreate(support);
-          setCustomPoints([]);
-          setCenter(null);
-          setPreviewSupport(null);
-          setDragging(false);
-          return;
-        }
+      if (customPoints.length === 0) {
+        setCustomPoints([pt.clone()]);
+        setDrawingCustom(true);
+      } else {
+        setCustomPoints(prev => [...prev, pt.clone()]);
+        setDrawingCustom(true);
       }
-      // add new point
-      setCustomPoints(prev => [...prev, pt]);
       return;
     }
     if (!center) {
@@ -206,8 +236,12 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     } else {
       // second click also finalizes if not dragging
       const support = toSupport(center, p);
-      const autoH = computeAutoHeight(center.x, center.y);
-      if (autoH != null) (support as any).height = autoH;
+      if (!support) return;
+      const metrics = computeMetrics(support);
+      if (metrics) {
+        (support as any).height = metrics.height;
+        (support as any).baseY = metrics.baseY;
+      }
       onCreate(support);
       setCenter(null);
       setPreviewSupport(null);
@@ -216,7 +250,31 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   };
 
   const handlePointerUp = (e: any) => {
-    // finalize only on explicit second click, not on pointer up
+    if (type !== 'custom') {
+      return;
+    }
+    if (!drawingCustom) {
+      return;
+    }
+    const pt = new THREE.Vector2(e.point.x, e.point.z);
+    setHover(pt.clone());
+
+    if (customPoints.length >= 3) {
+      const first = customPoints[0];
+      if (pt.distanceTo(first) <= closeThreshold) {
+        finalizeCustomSupport(customPoints);
+        return;
+      }
+    }
+
+    setCustomPoints(prev => {
+      if (prev.length === 0) return [pt.clone()];
+      const last = prev[prev.length - 1];
+      if (pt.distanceTo(last) < 0.25) {
+        return prev;
+      }
+      return [...prev, pt.clone()];
+    });
   };
 
   // XY Guides (crosshair + axes through point)
@@ -258,44 +316,45 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     if (type !== 'custom' || (customPoints.length === 0 && !hover)) return null;
     const y = baseTopY + 0.035;
     const pts = [...customPoints];
-    if (hover) pts.push(hover.clone());
+    if (hover) {
+      pts.push(hover.clone());
+    }
     if (pts.length < 2) {
       return (
         <>
           {customPoints.map((v, i) => (
             <mesh key={`p-${i}`} position={[v.x, y, v.y]} renderOrder={1001} rotation={[-Math.PI/2,0,0]}>
               <circleGeometry args={[0.9, 20]} />
-              <meshBasicMaterial color={0x2563eb} depthTest={false} depthWrite={false} />
+              <meshBasicMaterial color={i === 0 ? 0xef4444 : 0x2563eb} depthTest={false} depthWrite={false} />
             </mesh>
           ))}
         </>
       );
     }
-    const flat = pts.flatMap(v => [v.x, y, v.y]);
-    const positions = new Float32Array(flat);
+    const positions = new Float32Array(pts.flatMap(v => [v.x, y, v.y]));
     return (
       <>
         {customPoints.map((v, i) => (
           <mesh key={`p-${i}`} position={[v.x, y, v.y]} renderOrder={1001} rotation={[-Math.PI/2,0,0]}>
             <circleGeometry args={[0.9, 20]} />
-            <meshBasicMaterial color={i===0 ? 0xef4444 : 0x2563eb} depthTest={false} depthWrite={false} />
+            <meshBasicMaterial color={i === 0 ? 0xef4444 : 0x2563eb} depthTest={false} depthWrite={false} />
           </mesh>
         ))}
-        <lineSegments renderOrder={1000}>
+        <lineLoop renderOrder={1000}>
           <bufferGeometry>
             <bufferAttribute attach="attributes-position" count={positions.length/3} array={positions} itemSize={3} />
           </bufferGeometry>
           <lineBasicMaterial color={0x2563eb} depthTest={false} depthWrite={false} />
-        </lineSegments>
+        </lineLoop>
       </>
     );
   };
 
   return (
     <>
-      {/* Large transparent plane aligned to XZ at y=0 to capture pointer events */}
+      {/* Large transparent plane aligned to XZ at baseTopY to capture pointer events */}
       <mesh
-        position={[0, 0.001, 0]}
+        position={[0, baseTopY + 0.001, 0]}
         rotation={[-Math.PI / 2, 0, 0]}
         onPointerMove={handlePointerMove}
         onPointerDown={handlePointerDown}
@@ -312,7 +371,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
       {/* Center marker (show only after first click) */}
       {center && (
-        <mesh position={[center.x, 0.035, center.y]} renderOrder={1001} rotation={[-Math.PI / 2, 0, 0]}>
+        <mesh position={[center.x, baseTopY + 0.035, center.y]} renderOrder={1001} rotation={[-Math.PI / 2, 0, 0]}>
           <ringGeometry args={[0.6, 1.2, 24]} />
           <meshBasicMaterial color={0x374151} transparent opacity={0.9} depthTest={false} depthWrite={false} />
         </mesh>
@@ -326,7 +385,14 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
       {/* HUD */}
       {previewSupport && (
-        <Html position={[ (previewSupport as any).center.x, (previewSupport as any).height + 1.2, (previewSupport as any).center.y ]} distanceFactor={3.2}>
+        <Html
+          position={[
+            (previewSupport as any).center.x,
+            ((previewSupport as any).baseY ?? baseTopY) + previewSupport.height + 1.2,
+            (previewSupport as any).center.y
+          ]}
+          distanceFactor={3.2}
+        >
           <div className="bg-black/70 text-white rounded-full shadow whitespace-nowrap" style={{ fontSize: '9px', padding: '1px 6px', border: '1px solid rgba(255,255,255,0.25)' }}>
             {previewSupport.type === 'cylindrical' && (
               <>R {(previewSupport as any).radius.toFixed(1)} mm  H {previewSupport.height.toFixed(1)} mm</>
@@ -345,7 +411,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       )}
 
       {center && (
-        <Html position={[center.x, 0.01, center.y]}>
+        <Html position={[center.x, baseTopY + 0.01, center.y]}>
           <div className="px-2 py-1 text-xs bg-primary text-white rounded shadow">Click to set center • Drag/Click again to set size • Esc to cancel</div>
         </Html>
       )}

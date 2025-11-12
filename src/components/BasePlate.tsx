@@ -22,6 +22,15 @@ interface BasePlateProps {
   meshRef?: React.RefObject<THREE.Mesh>;
 }
 
+const finalizeGeometry = (geometry: THREE.BufferGeometry) => {
+  geometry.computeBoundingBox();
+  geometry.computeVertexNormals();
+  if (typeof (geometry as any).computeBoundsTree === 'function') {
+    (geometry as any).computeBoundsTree();
+  }
+  return geometry;
+};
+
 const BasePlate: React.FC<BasePlateProps> = ({
   type,
   width = 100,
@@ -133,9 +142,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
               // Center along extrusion axis and align thickness to Y
               g.translate(0, 0, -depth / 2);
               g.rotateX(-Math.PI / 2);
-              g.computeBoundingBox();
-              g.computeVertexNormals();
-              return g;
+              return finalizeGeometry(g);
             }
           } catch (error) {
             console.warn('Error creating convex hull geometry, falling back to rectangular:', error);
@@ -163,9 +170,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
         });
         g.translate(0, 0, -depth / 2);
         g.rotateX(-Math.PI / 2);
-        g.computeBoundingBox();
-        g.computeVertexNormals();
-        return g;
+        return finalizeGeometry(g);
 
       case 'perforated-panel':
         // Rounded rectangle with slight bevel for soft edges
@@ -194,9 +199,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
           });
           g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
-          g.computeBoundingBox();
-          g.computeVertexNormals();
-          return g;
+          return finalizeGeometry(g);
         }
 
       case 'metal-wooden-plate':
@@ -225,9 +228,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
           });
           g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
-          g.computeBoundingBox();
-          g.computeVertexNormals();
-          return g;
+          return finalizeGeometry(g);
         }
 
       case 'rectangular':
@@ -257,9 +258,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
           });
           g.translate(0, 0, -depth / 2);
           g.rotateX(-Math.PI / 2);
-          g.computeBoundingBox();
-          g.computeVertexNormals();
-          return g;
+          return finalizeGeometry(g);
         }
     }
   }, [type, width, height, depth, radius, modelGeometry]);

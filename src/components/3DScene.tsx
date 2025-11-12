@@ -333,6 +333,8 @@ function TransformAnchor({
     return Math.round(deg);
   }, []);
 
+  
+
   const rotationDegrees = useMemo(() => {
     if (!rotation) {
       return { x: 0, y: 0, z: 0 };
@@ -546,6 +548,13 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
       hasNormalizedRef.current = true;
     }
 
+    if (typeof (geometry as any).disposeBoundsTree === 'function') {
+      (geometry as any).disposeBoundsTree();
+    }
+    if (typeof (geometry as any).computeBoundsTree === 'function') {
+      (geometry as any).computeBoundsTree();
+    }
+
     if (dimensions && (dimensions.x || dimensions.y || dimensions.z)) {
       const box = geometry.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position'));
       const currentDimensions = box.getSize(new THREE.Vector3());
@@ -637,6 +646,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   } | null>(null);
   const modelMeshRef = useRef<THREE.Mesh>(null);
   const basePlateMeshRef = useRef<THREE.Mesh>(null);
+  const [baseTopY, setBaseTopY] = useState<number>(0);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
   const [modelColors, setModelColors] = useState<Map<string, string>>(new Map());
@@ -646,6 +656,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
   const [supports, setSupports] = useState<AnySupport[]>([]);
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
+
+  // Ensure supports use the baseplate TOP surface, not bottom: compute baseTopY from world bbox
+  React.useEffect(() => {
+    const updateTopY = () => {
+      const mesh = basePlateMeshRef.current;
+      if (!mesh) { setBaseTopY(0); return; }
+      mesh.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(mesh);
+      if (box.isEmpty()) { setBaseTopY(0); return; }
+      setBaseTopY(box.max.y);
+    };
+    updateTopY();
+    const id = setInterval(updateTopY, 250);
+    return () => clearInterval(id);
+  }, []);
 
   const updateCamera = useCallback((orientation: ViewOrientation, bounds: BoundsSummary | null) => {
     const orthoCam = camera as THREE.OrthographicCamera;
@@ -1202,7 +1227,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
       {/* Persistent supports */}
       {supports.map((s) => (
-        <SupportMesh key={s.id} support={s} baseTopY={basePlate ? (basePlate.position?.[1] ?? 0) + (Number(basePlate.depth) || 0) / 2 : 0} />
+        <SupportMesh key={s.id} support={s} baseTopY={baseTopY} />
       ))}
 
       {/* Cavity preview mesh */}
@@ -1223,7 +1248,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           }}
           defaultCenter={new THREE.Vector2(modelBounds?.center.x || 0, modelBounds?.center.z || 0)}
           raycastTargets={[modelMeshRef.current as any].filter(Boolean)}
-          baseTopY={basePlate ? (basePlate.position?.[1] ?? 0) + (Number(basePlate.depth) || 0) / 2 : 0}
+          baseTopY={baseTopY}
+          baseTarget={basePlateMeshRef.current}
           contactOffset={Number(placing.initParams?.contactOffset ?? 0)}
           maxRayHeight={2000}
         />

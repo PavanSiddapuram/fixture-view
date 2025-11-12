@@ -207,6 +207,10 @@ export function useFileProcessing(): UseFileProcessingReturn {
         geometry.computeVertexNormals();
       }
 
+      if (typeof (geometry as any).computeBoundsTree === 'function') {
+        geometry.computeBoundsTree();
+      }
+
       // Create material and mesh
       const material = new THREE.MeshStandardMaterial({
         color: 0xb0b0b0, // Neutral gray

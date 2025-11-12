@@ -7,7 +7,9 @@ export interface SupportBase {
   type: SupportType;
   center: THREE.Vector2; // on plate, units mm
   height: number; // mm
+  baseY?: number; // local baseplate contact height in world units
   rotationZ?: number; // radians, for rectangular/custom
+  contactOffset?: number; // mm gap reserved from model contact
 }
 
 export interface RectSupport extends SupportBase {
