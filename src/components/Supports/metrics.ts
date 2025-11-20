@@ -17,7 +17,7 @@ export interface SupportMetrics {
 }
 
 const DEFAULT_MAX_RAY_HEIGHT = 2000;
-
+ 
 const unitVecUp = new THREE.Vector3(0, 1, 0);
 const unitVecDown = new THREE.Vector3(0, -1, 0);
 

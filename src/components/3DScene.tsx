@@ -8,7 +8,9 @@ import ModelTransformControls from './ModelTransformControls';
 import * as THREE from 'three';
 import SupportPlacement from './Supports/SupportPlacement';
 import SupportMesh from './Supports/SupportMeshes';
+import SupportEditOverlay from './Supports/SupportEditOverlay';
 import { SupportType, AnySupport } from './Supports/types';
+import { getSupportFootprintBounds } from './Supports/metrics';
 
 interface ThreeDSceneProps {
   currentFile: ProcessedFile | null;
@@ -656,6 +658,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
   const [supports, setSupports] = useState<AnySupport[]>([]);
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
+  const editingSupportRef = useRef<AnySupport | null>(null);
+  const [editingSupport, setEditingSupport] = useState<AnySupport | null>(null);
 
   // Ensure supports use the baseplate TOP surface, not bottom: compute baseTopY from world bbox
   React.useEffect(() => {
@@ -740,18 +744,6 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     if (controlsRef.current) {
       const c = controlsRef.current;
       c.target.copy(target);
-      // 1D side views: lock rotation; Isometric: enable rotation
-      const isIso = orientation === 'iso';
-      c.enableRotate = isIso;
-      c.enableZoom = true;
-      c.enablePan = true;
-      // Reset constraints for iso; for 1D, keep defaults but rotation disabled anyway
-      if (isIso) {
-        c.minAzimuthAngle = -Infinity;
-        c.maxAzimuthAngle = Infinity;
-        c.minPolarAngle = 0;
-        c.maxPolarAngle = Math.PI;
-      }
       c.update();
     }
   }, [camera, size.width, size.height]);
@@ -862,12 +854,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handleStartPlacement = (e: CustomEvent) => {
       const { type, params } = e.detail || {};
+      // exit any active support edit session when starting fresh placement
+      editingSupportRef.current = null;
+      setEditingSupport(null);
+
       // remember previous view, switch to Top for placement
       prevOrientationRef.current = currentOrientation;
       setCurrentOrientation('top');
       updateCamera('top', modelBounds);
       setPlacing({ active: true, type: type as SupportType, initParams: params || {} });
-      setOrbitControlsEnabled(false);
     };
     const handleCancelPlacement = () => {
       setPlacing({ active: false, type: null, initParams: {} });
@@ -875,6 +870,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       // restore previous view
       setCurrentOrientation(prevOrientationRef.current);
       updateCamera(prevOrientationRef.current, modelBounds);
+      editingSupportRef.current = null;
     };
     window.addEventListener('supports-start-placement', handleStartPlacement as EventListener);
     window.addEventListener('supports-cancel-placement', handleCancelPlacement as EventListener);
@@ -884,20 +880,107 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, [currentOrientation, updateCamera, modelBounds]);
 
+  // Listen for click-to-edit on existing supports
+  React.useEffect(() => {
+    const handleSupportEdit = (e: CustomEvent) => {
+      const s = e.detail as AnySupport;
+      if (!s) return;
+
+      // Store support being edited and enter top view with handle-based overlay
+      editingSupportRef.current = s;
+      setEditingSupport(s);
+
+      // Remember previous view (for when we exit edit) but do NOT force top view;
+      // editing should work from whatever view the user is currently in.
+      prevOrientationRef.current = currentOrientation;
+      // Ensure placement controller is not active while editing
+      setPlacing({ active: false, type: null, initParams: {} });
+    };
+
+    window.addEventListener('support-edit', handleSupportEdit as EventListener);
+    return () => window.removeEventListener('support-edit', handleSupportEdit as EventListener);
+  }, [currentOrientation, updateCamera, modelBounds]);
+
   const handleSupportCreate = useCallback((support: AnySupport) => {
+    // For new supports created via placement, just emit event as-is
     window.dispatchEvent(new CustomEvent('support-created', { detail: support }));
+
+    // Auto-expand baseplate if this support overhangs current footprint
+    setBasePlate(prev => {
+      if (!prev) return prev;
+      const { width, height } = prev;
+      if (!width || !height) return prev;
+
+      const halfW = width / 2;
+      const halfH = height / 2;
+      const footprint = getSupportFootprintBounds(support);
+      const margin = 10; // extra extension beyond furthest support (mm)
+
+      const needsExpandX = footprint.minX < -halfW || footprint.maxX > halfW;
+      const needsExpandZ = footprint.minZ < -halfH || footprint.maxZ > halfH;
+
+      if (!needsExpandX && !needsExpandZ) {
+        return prev;
+      }
+
+      let newHalfW = halfW;
+      let newHalfH = halfH;
+
+      if (needsExpandX) {
+        const furthestX = Math.max(Math.abs(footprint.minX), Math.abs(footprint.maxX));
+        newHalfW = Math.max(halfW, furthestX + margin);
+      }
+
+      if (needsExpandZ) {
+        const furthestZ = Math.max(Math.abs(footprint.minZ), Math.abs(footprint.maxZ));
+        newHalfH = Math.max(halfH, furthestZ + margin);
+      }
+
+      const expandedWidth = newHalfW * 2;
+      const expandedHeight = newHalfH * 2;
+
+      // For convex-hull plates, width/height are only hints in geometry; when we
+      // need to grow beyond the original hull, treat it as a rectangular plate
+      // so extension is visually accurate and symmetric around the origin.
+      if (prev.type === 'convex-hull') {
+        return {
+          ...prev,
+          type: 'rectangular',
+          oversizeXY: undefined,
+          width: expandedWidth,
+          height: expandedHeight,
+        };
+      }
+
+      return {
+        ...prev,
+        width: expandedWidth,
+        height: expandedHeight,
+      };
+    });
+
     setPlacing({ active: false, type: null, initParams: {} });
     setOrbitControlsEnabled(true);
     // restore previous view after creation
     setCurrentOrientation(prevOrientationRef.current);
     updateCamera(prevOrientationRef.current, modelBounds);
+    editingSupportRef.current = null;
   }, [modelBounds, updateCamera]);
 
   // Persist created supports in scene
   React.useEffect(() => {
     const onSupportCreated = (e: CustomEvent) => {
       const s: AnySupport = e.detail;
-      setSupports(prev => [...prev, s]);
+      setSupports(prev => {
+        const editing = editingSupportRef.current;
+        if (editing) {
+          const replaced = prev.map(p => (p.id === editing.id ? s : p));
+          editingSupportRef.current = null;
+          setEditingSupport(null);
+          return replaced;
+        }
+        return [...prev, s];
+      });
     };
     window.addEventListener('support-created', onSupportCreated as EventListener);
     return () => window.removeEventListener('support-created', onSupportCreated as EventListener);
@@ -983,18 +1066,27 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         return;
       }
 
-      // Place plate so its top is on the XY plane (y = 0) => center at -thickness/2
-      cfg.position = new THREE.Vector3(0, -(cfg.depth ?? tStd) / 2, 0);
-
       // Ensure model rests on top: set model minY to 0 if needed
       if (modelMeshRef.current) {
         const mbox = new THREE.Box3().setFromObject(modelMeshRef.current);
         const minY = mbox.min.y;
         if (Math.abs(minY) > 1e-3) {
           modelMeshRef.current.position.y -= minY; // shift so minY becomes 0
-          setModelTransform({ position: modelMeshRef.current.position.clone(), rotation: modelMeshRef.current.rotation.clone(), scale: modelMeshRef.current.scale.clone() });
+          setModelTransform({
+            position: modelMeshRef.current.position.clone(),
+            rotation: modelMeshRef.current.rotation.clone(),
+            scale: modelMeshRef.current.scale.clone(),
+          });
         }
       }
+
+      // Place plate directly under the current model transform so convex-hull
+      // plates align with the model footprint even when the model is offset.
+      const modelPos = modelMeshRef.current
+        ? modelMeshRef.current.position.clone()
+        : new THREE.Vector3(0, 0, 0);
+      const depthForPos = cfg.depth ?? tStd;
+      cfg.position = new THREE.Vector3(modelPos.x, modelPos.y - depthForPos / 2, modelPos.z);
 
       setBasePlate(cfg);
     };
@@ -1160,6 +1252,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           pitch={basePlate.pitch}
           holeDiameter={basePlate.holeDiameter}
           modelGeometry={basePlate.type === 'convex-hull' && modelMeshRef.current?.geometry ? modelMeshRef.current.geometry : undefined}
+          modelMatrixWorld={basePlate.type === 'convex-hull' && modelMeshRef.current ? modelMeshRef.current.matrixWorld : undefined}
+          modelOrigin={basePlate.type === 'convex-hull' && modelMeshRef.current ? modelMeshRef.current.position : undefined}
           selected={false}
           meshRef={basePlateMeshRef}
           onSelect={() => {
@@ -1229,6 +1323,33 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {supports.map((s) => (
         <SupportMesh key={s.id} support={s} baseTopY={baseTopY} />
       ))}
+
+      {/* Handle-based support editing overlay */}
+      {editingSupport && (
+        <SupportEditOverlay
+          support={editingSupport}
+          baseTopY={baseTopY}
+          onCommit={(updated) => {
+            setSupports(prev => prev.map(s => (s.id === updated.id ? updated : s)));
+            editingSupportRef.current = null;
+            setEditingSupport(null);
+            setOrbitControlsEnabled(true);
+            // Restore previous view after edit
+            setCurrentOrientation(prevOrientationRef.current);
+            updateCamera(prevOrientationRef.current, modelBounds);
+          }}
+          onCancel={() => {
+            editingSupportRef.current = null;
+            setEditingSupport(null);
+            setOrbitControlsEnabled(true);
+            setCurrentOrientation(prevOrientationRef.current);
+            updateCamera(prevOrientationRef.current, modelBounds);
+          }}
+          onDragStateChange={(dragging) => {
+            setOrbitControlsEnabled(!dragging);
+          }}
+        />
+      )}
 
       {/* Cavity preview mesh */}
       {cavityPreview && (

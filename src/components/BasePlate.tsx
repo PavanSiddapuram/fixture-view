@@ -13,6 +13,8 @@ interface BasePlateProps {
   onSelect?: () => void;
   selected?: boolean;
   modelGeometry?: THREE.BufferGeometry; // For convex hull around model
+  modelMatrixWorld?: THREE.Matrix4; // World transform of model for accurate hull
+  modelOrigin?: THREE.Vector3; // Model world position so hull is relative to model
   oversizeXY?: number; // extra margin on XZ for convex hull
   pitch?: number; // perforated panel hole spacing
   holeDiameter?: number; // perforated panel hole diameter
@@ -42,6 +44,8 @@ const BasePlate: React.FC<BasePlateProps> = ({
   onSelect,
   selected = false,
   modelGeometry,
+  modelMatrixWorld,
+  modelOrigin,
   oversizeXY = 10,
   pitch = 20,
   holeDiameter = 6
@@ -106,36 +110,42 @@ const BasePlate: React.FC<BasePlateProps> = ({
             const points2D: Array<{x:number; z:number}> = [];
             const dedupe = new Set<string>();
             const sampleStep = Math.max(1, Math.floor(positions.count / 5000));
+            const v = new THREE.Vector3();
+            const originX = modelOrigin?.x ?? 0;
+            const originZ = modelOrigin?.z ?? 0;
             for (let i = 0; i < positions.count; i += sampleStep) {
-              const x = positions.getX(i);
-              const z = positions.getZ(i);
+              v.set(positions.getX(i), positions.getY(i), positions.getZ(i));
+              if (modelMatrixWorld) {
+                v.applyMatrix4(modelMatrixWorld);
+              }
+              const x = v.x - originX;
+              const z = v.z - originZ;
               const key = `${Math.round(x*100)}:${Math.round(z*100)}`;
               if (!dedupe.has(key)) { dedupe.add(key); points2D.push({x, z}); }
             }
 
             if (points2D.length >= 3) {
-              // Monotone chain convex hull in 2D
+              // Monotone chain convex hull in 2D, already relative to model origin
               const sorted = points2D.slice().sort((a,b)=> a.x===b.x ? a.z-b.z : a.x-b.x);
               const cross = (o:any,a:any,b:any)=> (a.x-o.x)*(b.z-o.z) - (a.z-o.z)*(b.x-o.x);
               const lower:any[]=[]; for (const p of sorted){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p) <= 0) lower.pop(); lower.push(p);} 
               const upper:any[]=[]; for (let i=sorted.length-1;i>=0;i--){ const p=sorted[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p) <= 0) upper.pop(); upper.push(p);} 
               const hull = lower.slice(0, lower.length-1).concat(upper.slice(0, upper.length-1));
 
-              // Inflate by oversizeXY
-              const cx = hull.reduce((s,p)=>s+p.x,0)/hull.length;
-              const cz = hull.reduce((s,p)=>s+p.z,0)/hull.length;
+              // Inflate by oversizeXY away from the model origin so the baseplate
+              // grows outward but stays centered under the model position.
               const margin = (typeof oversizeXY === 'number' ? oversizeXY : 10);
               const inflated = hull.map(p=>{
-                const dx = p.x - cx; const dz = p.z - cz;
-                const len = Math.hypot(dx,dz) || 1;
-                return { x: p.x + (dx/len)*margin, z: p.z + (dz/len)*margin };
+                const len = Math.hypot(p.x, p.z) || 1;
+                const nx = p.x / len;
+                const nz = p.z / len;
+                return { x: p.x + nx * margin, z: p.z + nz * margin };
               });
 
-              // Create shape from hull polygon
+              // Create shape from hull polygon directly in model-origin space
               const shape = new THREE.Shape();
-              // Center shape about centroid so geometry is centered at origin
-              shape.moveTo(inflated[0].x - cx, inflated[0].z - cz);
-              for (let i=1;i<inflated.length;i++){ shape.lineTo(inflated[i].x - cx, inflated[i].z - cz); }
+              shape.moveTo(inflated[0].x, inflated[0].z);
+              for (let i=1;i<inflated.length;i++){ shape.lineTo(inflated[i].x, inflated[i].z); }
               shape.closePath();
 
               const g = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: false });
@@ -261,7 +271,7 @@ const BasePlate: React.FC<BasePlateProps> = ({
           return finalizeGeometry(g);
         }
     }
-  }, [type, width, height, depth, radius, modelGeometry]);
+  }, [type, width, height, depth, radius, modelGeometry, modelMatrixWorld, modelOrigin, oversizeXY]);
 
   // Update geometry when props change
   React.useEffect(() => {

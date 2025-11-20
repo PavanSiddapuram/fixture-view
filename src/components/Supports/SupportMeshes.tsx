@@ -28,20 +28,25 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
   const skirtHeight = 0.6; // mm visual chamfer/fillet at base
   const skirtExpand = 0.4; // mm outward expansion to create slope
 
+  const handleSelect = () => {
+    if (preview) return;
+    window.dispatchEvent(new CustomEvent('support-edit', { detail: support }));
+  };
+
   if (type === 'cylindrical') {
     const { radius } = support as any;
     const geo = React.useMemo(() => new THREE.CylinderGeometry(radius, radius, height, 192), [radius, height]);
     const skirtGeo = React.useMemo(() => new THREE.CylinderGeometry(radius, radius + skirtExpand, skirtHeight, 192), [radius]);
     return (
       <>
-        <group position={[center.x, effectiveBaseY + skirtHeight / 2, center.y]}>
+        <group position={[center.x, effectiveBaseY + skirtHeight / 2, center.y]} onClick={handleSelect}>
           <mesh geometry={skirtGeo} material={materialFor(preview)} />
           <lineSegments renderOrder={2}>
             <edgesGeometry args={[skirtGeo, 70]} />
             <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
           </lineSegments>
         </group>
-        <group position={[center.x, yCenter, center.y]}>
+        <group position={[center.x, yCenter, center.y]} onClick={handleSelect}>
           <mesh geometry={geo} material={materialFor(preview)} />
           <lineSegments renderOrder={2}>
             <edgesGeometry args={[geo, 70]} />
@@ -59,14 +64,14 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       const skirtGeo = React.useMemo(() => new THREE.BoxGeometry(width + 2 * skirtExpand, skirtHeight, depth + 2 * skirtExpand), [width, depth]);
       return (
         <>
-          <group position={[center.x, effectiveBaseY + skirtHeight / 2, center.y]} rotation={[0, rotY, 0]}>
+          <group position={[center.x, effectiveBaseY + skirtHeight / 2, center.y]} rotation={[0, rotY, 0]} onClick={handleSelect}>
             <mesh geometry={skirtGeo} material={materialFor(preview)} />
             <lineSegments renderOrder={2}>
               <edgesGeometry args={[skirtGeo]} />
               <lineBasicMaterial color={0x9ca3af} depthTest={false} depthWrite={false} />
             </lineSegments>
           </group>
-          <group position={[center.x, yCenter, center.y]} rotation={[0, rotY, 0]}>
+          <group position={[center.x, yCenter, center.y]} rotation={[0, rotY, 0]} onClick={handleSelect}>
             <mesh geometry={geo} material={materialFor(preview)} />
             <lineSegments renderOrder={2}>
               <edgesGeometry args={[geo]} />
@@ -123,7 +128,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
     }, [rrShapeSkirt]);
     return (
       <>
-        <group position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]}>
+        <group position={[center.x, effectiveBaseY, center.y]} rotation={[0, rotY, 0]} onClick={handleSelect}>
           <mesh geometry={rrGeoSkirt} material={materialFor(preview)} />
           <lineSegments renderOrder={2}>
             <edgesGeometry args={[rrGeoSkirt, 45]} />
@@ -180,7 +185,7 @@ const SupportMesh: React.FC<SupportMeshProps> = ({ support, preview, baseTopY = 
       return e;
     }, [JSON.stringify(polygon), height]);
     return (
-      <group position={[center.x, effectiveBaseY + height / 2, center.y]} rotation={[0, rotY, 0]}>
+      <group position={[center.x, effectiveBaseY + height / 2, center.y]} rotation={[0, rotY, 0]} onClick={handleSelect}>
         <mesh geometry={geo} material={materialFor(preview)} />
         <lineSegments renderOrder={2}>
           <edgesGeometry args={[geo]} />

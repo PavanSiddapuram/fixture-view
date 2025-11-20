@@ -46,6 +46,19 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
   const closeThreshold = 5;
 
+  // When entering via edit mode, we may receive an initial center in initParams.
+  React.useEffect(() => {
+    if (!active) {
+      return;
+    }
+    if (center) return;
+    const cx = initParams?.centerX;
+    const cz = initParams?.centerZ;
+    if (typeof cx === 'number' && typeof cz === 'number') {
+      setCenter(new THREE.Vector2(cx, cz));
+    }
+  }, [active, initParams, center]);
+
   const finalizeCustomSupport = React.useCallback((points: THREE.Vector2[]) => {
     if (points.length < 3) return;
     const pts = points.map(p => p.clone());
@@ -190,9 +203,56 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     return null;
   };
 
+  const getPlaneHit = (e: any): { point: THREE.Vector3 | null; planePoint: THREE.Vector2 | null; hitOnTarget: boolean } => {
+    const ray = e.ray as THREE.Ray | undefined;
+    if (!ray) {
+      return { point: null, planePoint: null, hitOnTarget: false };
+    }
+
+    // Intersect with XZ plane at baseTopY
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -baseTopY);
+    const hitPoint = new THREE.Vector3();
+    const hasPlaneHit = ray.intersectPlane(plane, hitPoint) !== null;
+    if (!hasPlaneHit) {
+      return { point: null, planePoint: null, hitOnTarget: false };
+    }
+
+    // Check if ray actually hits model or baseplate; only then we want to treat it as a support interaction
+    let hitOnTarget = false;
+    const targets: THREE.Object3D[] = [];
+    if (baseTarget) targets.push(baseTarget);
+    if (raycastTargets && raycastTargets.length > 0) {
+      targets.push(...raycastTargets);
+    }
+
+    if (targets.length > 0) {
+      raycasterRef.current.set(ray.origin, ray.direction);
+      const intersections = raycasterRef.current.intersectObjects(targets, true);
+      if (intersections.length > 0) {
+        hitOnTarget = true;
+      }
+    }
+
+    const planePoint = new THREE.Vector2(hitPoint.x, hitPoint.z);
+    return { point: hitPoint, planePoint, hitOnTarget };
+  };
+
   const handlePointerMove = (e: any) => {
-    const p = e.point as THREE.Vector3;
-    const planePoint = new THREE.Vector2(p.x, p.z);
+    const { point, planePoint, hitOnTarget } = getPlaneHit(e);
+
+    const hasCenter = !!center;
+    const hasCustomPath = customPoints.length > 0 || drawingCustom;
+    const isNonCustomPlacing = hasCenter && type !== 'custom';
+    const isCustomDrawing = type === 'custom' && hasCustomPath;
+
+    // Before placement starts: only react when hovering over model/baseplate
+    if ((!point || !planePoint) || (!hitOnTarget && !isNonCustomPlacing && !isCustomDrawing)) {
+      if (!hasCenter && !hasCustomPath) {
+        setHover(null);
+      }
+      return;
+    }
+
     setHover(planePoint.clone());
     if (type === 'custom') {
       if (drawingCustom && customPoints.length >= 1) {
@@ -206,7 +266,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       return;
     }
     if (!center) return;
-    const support = toSupport(center, p);
+    const support = toSupport(center, point);
     if (!support) return;
     const metrics = computeMetrics(support);
     if (metrics) {
@@ -217,10 +277,24 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
   };
 
   const handlePointerDown = (e: any) => {
+    const { point, planePoint, hitOnTarget } = getPlaneHit(e);
+
+    if (!point || !planePoint) {
+      return;
+    }
+
+    const hasCenter = !!center;
+    const hasCustomPath = customPoints.length > 0 || drawingCustom;
+
+    // First click must be on model/baseplate so camera can rotate freely elsewhere
+    if (!hasCenter && !hasCustomPath && !hitOnTarget) {
+      return;
+    }
+
+    // For placement interactions, prevent orbit controls from treating this as a drag
     e.stopPropagation();
-    const p = e.point as THREE.Vector3; // on plane y=0
     if (type === 'custom') {
-      const pt = new THREE.Vector2(p.x, p.z);
+      const pt = planePoint.clone();
       if (customPoints.length === 0) {
         setCustomPoints([pt.clone()]);
         setDrawingCustom(true);
@@ -231,11 +305,11 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       return;
     }
     if (!center) {
-      setCenter(new THREE.Vector2(p.x, p.z));
+      setCenter(planePoint.clone());
       setDragging(true);
     } else {
       // second click also finalizes if not dragging
-      const support = toSupport(center, p);
+      const support = toSupport(center, point);
       if (!support) return;
       const metrics = computeMetrics(support);
       if (metrics) {
@@ -256,7 +330,13 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     if (!drawingCustom) {
       return;
     }
-    const pt = new THREE.Vector2(e.point.x, e.point.z);
+
+    const { planePoint } = getPlaneHit(e);
+    if (!planePoint) {
+      return;
+    }
+
+    const pt = planePoint.clone();
     setHover(pt.clone());
 
     if (customPoints.length >= 3) {
@@ -309,6 +389,104 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
         </lineSegments>
       </group>
     );
+  };
+
+  // Construction rectangle matching baseplate extents and dimension lines for supports
+  const ConstructionOverlays: React.FC<{ s: AnySupport | null }> = ({ s }) => {
+    if (!s) return null;
+    const y = baseTopY + 0.018;
+
+    const elems: JSX.Element[] = [];
+
+    // Baseplate-matching rectangle (assuming plate centered at origin)
+    if (baseTopY !== undefined) {
+      const plateW = 800; // visual extent; does not have to match exact plate, acts as framing
+      const plateH = 800;
+      const hw = plateW / 2;
+      const hh = plateH / 2;
+      const rect = new Float32Array([
+        -hw, y, -hh,  hw, y, -hh,
+         hw, y, -hh,  hw, y,  hh,
+         hw, y,  hh, -hw, y,  hh,
+        -hw, y,  hh, -hw, y, -hh,
+      ]);
+      elems.push(
+        <lineSegments key="bp" frustumCulled={false} renderOrder={900}>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" count={rect.length / 3} array={rect} itemSize={3} />
+          </bufferGeometry>
+          <lineDashedMaterial color={0x9ca3af} linewidth={1} depthWrite={false} depthTest={false} dashSize={6} gapSize={4} />
+        </lineSegments>
+      );
+    }
+
+    // Dimension construction lines by type (text shown only in main HUD)
+    if (s.type === 'cylindrical' || s.type === 'conical') {
+      const center2 = (s as any).center as THREE.Vector2;
+      const radius = s.type === 'cylindrical' ? (s as any).radius as number : (s as any).baseRadius as number;
+      const angle = Math.PI / 4; // 45° for leader
+      const px = center2.x + Math.cos(angle) * radius;
+      const pz = center2.y + Math.sin(angle) * radius;
+      const leader = new Float32Array([
+        center2.x, y, center2.y,
+        px,        y, pz,
+      ]);
+      elems.push(
+        <group key="dim-circ" renderOrder={1100}>
+          <lineSegments frustumCulled={false}>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" count={leader.length / 3} array={leader} itemSize={3} />
+            </bufferGeometry>
+            <lineBasicMaterial color={0x6b7280} depthWrite={false} depthTest={false} />
+          </lineSegments>
+        </group>
+      );
+    } else if (s.type === 'rectangular') {
+      const { width, depth } = s as any;
+      const c = (s as any).center as THREE.Vector2;
+      const hw = width / 2;
+      const hd = depth / 2;
+
+      // Horizontal (width) dimension above support
+      const wx0 = c.x - hw;
+      const wx1 = c.x + hw;
+      const wy = y + 0.01;
+      const wline = new Float32Array([
+        wx0, wy, c.y,
+        wx1, wy, c.y,
+      ]);
+      elems.push(
+        <group key="dim-w" renderOrder={1100}>
+          <lineSegments frustumCulled={false}>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" count={wline.length / 3} array={wline} itemSize={3} />
+            </bufferGeometry>
+            <lineBasicMaterial color={0x6b7280} depthWrite={false} depthTest={false} />
+          </lineSegments>
+        </group>
+      );
+
+      // Vertical (depth) dimension to the right
+      const dz0 = c.y - hd;
+      const dz1 = c.y + hd;
+      const dx = c.x + hw + 2;
+      const dline = new Float32Array([
+        dx, y, dz0,
+        dx, y, dz1,
+      ]);
+      elems.push(
+        <group key="dim-d" renderOrder={1100}>
+          <lineSegments frustumCulled={false}>
+            <bufferGeometry>
+              <bufferAttribute attach="attributes-position" count={dline.length / 3} array={dline} itemSize={3} />
+            </bufferGeometry>
+            <lineBasicMaterial color={0x6b7280} depthWrite={false} depthTest={false} />
+          </lineSegments>
+        </group>
+      );
+    }
+
+    return <>{elems}</>;
   };
 
   // Custom polygon drawing preview (points + live segment). Standalone so JSX can reference it.
@@ -379,6 +557,9 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
 
       {/* 2D Outline Preview (non-custom) */}
       {previewSupport && type !== 'custom' && <OutlinePreview s={previewSupport} />}
+
+      {/* Construction overlays and dimension callouts */}
+      {previewSupport && <ConstructionOverlays s={previewSupport} />}
 
       {/* Custom drawing overlay */}
       <CustomPreview />
