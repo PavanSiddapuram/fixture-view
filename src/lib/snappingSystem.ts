@@ -51,7 +51,7 @@ export class SnappingSystem {
    * Generate snap points for a specific object
    */
   private generateObjectSnapPoints(object: THREE.Object3D) {
-    if (!object.geometry) return;
+    if (!object.geomeqtry) return;
 
     const worldPosition = new THREE.Vector3();
     object.getWorldPosition(worldPosition);

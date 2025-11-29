@@ -11,6 +11,8 @@ import SupportMesh from './Supports/SupportMeshes';
 import SupportEditOverlay from './Supports/SupportEditOverlay';
 import { SupportType, AnySupport } from './Supports/types';
 import { getSupportFootprintBounds } from './Supports/metrics';
+import { CSGEngine } from '@/lib/csgEngine';
+import { createOffsetMesh, extractVertices } from '@/lib/offset/offsetMeshProcessor';
 
 interface ThreeDSceneProps {
   currentFile: ProcessedFile | null;
@@ -334,7 +336,6 @@ function TransformAnchor({
     deg = ((deg + 180) % 360) - 180;
     return Math.round(deg);
   }, []);
-
   
 
   const rotationDegrees = useMemo(() => {
@@ -657,9 +658,15 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const prevOrientationRef = useRef<ViewOrientation>('iso');
   const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
   const [supports, setSupports] = useState<AnySupport[]>([]);
+  const [supportsTrimPreview, setSupportsTrimPreview] = useState<THREE.Mesh[]>([]);
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
   const editingSupportRef = useRef<AnySupport | null>(null);
   const [editingSupport, setEditingSupport] = useState<AnySupport | null>(null);
+
+  const csgEngineRef = useRef<CSGEngine | null>(null);
+  if (!csgEngineRef.current) {
+    csgEngineRef.current = new CSGEngine();
+  }
 
   // Ensure supports use the baseplate TOP surface, not bottom: compute baseTopY from world bbox
   React.useEffect(() => {
@@ -1010,6 +1017,156 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
     };
   }, []);
 
+  // Build a THREE.Mesh for a support using the same dimensions/origining as SupportMesh
+  const buildSupportMesh = useCallback((support: AnySupport, baseTop: number) => {
+    const { type, height, center } = support as any;
+    const rotY = (support as any).rotationZ ?? 0;
+    const effectiveBaseY = (support as any).baseY ?? baseTop;
+
+    let geometry: THREE.BufferGeometry | null = null;
+    let position = new THREE.Vector3(center.x, effectiveBaseY, center.y);
+    let rotation = new THREE.Euler(0, rotY, 0);
+
+    if (type === 'cylindrical') {
+      const { radius } = support as any;
+      const geo = new THREE.CylinderGeometry(radius, radius, height, 192);
+      geo.translate(0, height / 2, 0);
+      geometry = geo;
+    } else if (type === 'rectangular') {
+      const { width, depth, cornerRadius = 0 } = support as any;
+      if (cornerRadius <= 0) {
+        geometry = new THREE.BoxGeometry(width, height, depth);
+      } else {
+        const hw = width / 2;
+        const hd = depth / 2;
+        const r = Math.min(cornerRadius, hw, hd);
+        const s = new THREE.Shape();
+        s.moveTo(-hw + r, -hd);
+        s.lineTo(hw - r, -hd);
+        s.quadraticCurveTo(hw, -hd, hw, -hd + r);
+        s.lineTo(hw, hd - r);
+        s.quadraticCurveTo(hw, hd, hw - r, hd);
+        s.lineTo(-hw + r, hd);
+        s.quadraticCurveTo(-hw, hd, -hw, hd - r);
+        s.lineTo(-hw, -hd + r);
+        s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+        const extrude = new THREE.ExtrudeGeometry(s, { depth: height, bevelEnabled: false, curveSegments: 64 });
+        extrude.rotateX(Math.PI / 2);
+        extrude.translate(0, height / 2, 0);
+        geometry = extrude;
+      }
+    } else if (type === 'conical') {
+      const { baseRadius, topRadius } = support as any;
+      const geo = new THREE.CylinderGeometry(topRadius, baseRadius, height, 192);
+      geo.translate(0, height / 2, 0);
+      geometry = geo;
+    } else if (type === 'custom') {
+      const { polygon } = support as any;
+      const shape = new THREE.Shape();
+      if (polygon.length > 0) {
+        shape.moveTo(polygon[0][0], polygon[0][1]);
+        for (let i = 1; i < polygon.length; i++) shape.lineTo(polygon[i][0], polygon[i][1]);
+        shape.closePath();
+      }
+      const extrude = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 64 });
+      extrude.rotateX(Math.PI / 2);
+      extrude.translate(0, height / 2, 0);
+      geometry = extrude;
+    }
+
+    if (!geometry) return null;
+
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x6b7280 }));
+    mesh.position.copy(position);
+    mesh.rotation.copy(rotation);
+    mesh.updateMatrixWorld(true, true);
+    return mesh;
+  }, []);
+
+  // Listen for supports trim requests and build preview meshes (non-destructive)
+  React.useEffect(() => {
+    const handler = async (e: CustomEvent) => {
+      const { depth, offset, removalDirection, useModel, useAdvancedOffset, advancedOffsetOptions } = e.detail || {};
+      if (!useModel) {
+        setSupportsTrimPreview([]);
+        return;
+      }
+
+      const modelMesh = modelMeshRef.current;
+      if (!modelMesh || supports.length === 0) {
+        setSupportsTrimPreview([]);
+        return;
+      }
+
+      const engine = csgEngineRef.current;
+      if (!engine) {
+        setSupportsTrimPreview([]);
+        return;
+      }
+
+      const dir = (removalDirection instanceof THREE.Vector3)
+        ? removalDirection.clone().normalize()
+        : new THREE.Vector3(0, -1, 0);
+
+      let cutterMesh: THREE.Mesh | null = modelMesh;
+
+      if (useAdvancedOffset && advancedOffsetOptions) {
+        try {
+          const vertices = extractVertices(modelMesh.geometry as THREE.BufferGeometry);
+          const result = await createOffsetMesh(vertices, {
+            offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
+            pixelsPerUnit: advancedOffsetOptions.pixelsPerUnit ?? 10,
+            simplifyRatio: advancedOffsetOptions.simplifyRatio ?? null,
+            verifyManifold: advancedOffsetOptions.verifyManifold ?? true,
+            rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
+            rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
+          });
+          cutterMesh = new THREE.Mesh(result.geometry, (modelMesh.material as THREE.Material));
+        } catch (err) {
+          console.error('Advanced offset failed, falling back to normal trimming:', err);
+          cutterMesh = modelMesh;
+        }
+      }
+
+      const previewMeshes: THREE.Mesh[] = [];
+
+      supports.forEach((s) => {
+        const baseMesh = buildSupportMesh(s, baseTopY);
+        if (!baseMesh || !cutterMesh) return;
+
+        try {
+          const result = engine.createNegativeSpace(
+            baseMesh,
+            [cutterMesh],
+            dir,
+            {
+              depth: typeof depth === 'number' ? depth : 10,
+              angle: 0,
+              // When using advanced offset the cutter is already inflated; avoid double-inflation
+              offset: useAdvancedOffset ? 0 : (typeof offset === 'number' ? offset : 0),
+            }
+          );
+
+          if (result && result.isMesh) {
+            if (result.material && 'transparent' in result.material) {
+              (result.material as any).transparent = true;
+              (result.material as any).opacity = 0.45;
+              (result.material as any).depthWrite = false;
+            }
+            previewMeshes.push(result as THREE.Mesh);
+          }
+        } catch (err) {
+          console.error('Error computing trimmed support preview:', err);
+        }
+      });
+
+      setSupportsTrimPreview(previewMeshes);
+    };
+
+    window.addEventListener('supports-trim-request', handler as EventListener);
+    return () => window.removeEventListener('supports-trim-request', handler as EventListener);
+  }, [supports, baseTopY, buildSupportMesh]);
+
   // Handle base plate creation events
   React.useEffect(() => {
     const handleCreateBaseplate = (e: CustomEvent) => {
@@ -1343,17 +1500,8 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
             setEditingSupport(null);
             setOrbitControlsEnabled(true);
             setCurrentOrientation(prevOrientationRef.current);
-            updateCamera(prevOrientationRef.current, modelBounds);
-          }}
-          onDragStateChange={(dragging) => {
-            setOrbitControlsEnabled(!dragging);
           }}
         />
-      )}
-
-      {/* Cavity preview mesh */}
-      {cavityPreview && (
-        <primitive object={cavityPreview} />
       )}
 
       {/* Support placement controller */}
@@ -1379,6 +1527,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
       {/* Event handlers */}
       <mesh
         position={[0, 0, 0]}
+        onPointerDown={() => {
+          // Clicking on empty viewport should clear any active support edit overlay
+          if (editingSupportRef.current || editingSupport) {
+            editingSupportRef.current = null;
+            setEditingSupport(null);
+            setOrbitControlsEnabled(true);
+          }
+        }}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         visible={false}

@@ -26,10 +26,28 @@ export class CSGEngine {
     this.evaluator = new Evaluator();
   }
 
+  // Ensure geometry has a uv attribute so three-bvh-csg operations that expect UVs do not fail.
+  // For imported meshes (e.g. STL) that lack UVs, we create a dummy zeroed uv buffer. This is
+  // sufficient for boolean operations where we are not relying on texture coordinates.
+  private ensureUVs(geometry: THREE.BufferGeometry): void {
+    if (geometry.getAttribute('uv')) {
+      return;
+    }
+
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!position) {
+      return;
+    }
+
+    const uvArray = new Float32Array(position.count * 2);
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
+  }
+
   private cloneWorldGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
     const geo = mesh.geometry.clone();
     const m = mesh.matrixWorld.clone();
     geo.applyMatrix4(m);
+    this.ensureUVs(geo);
     return geo;
   }
 
@@ -54,6 +72,52 @@ export class CSGEngine {
     return geo;
   }
 
+  // Compute a scale-aware, clamped offset based on tool bounds and user-provided offset
+  private computeEffectiveOffset(geometry: THREE.BufferGeometry, userOffset: number): number {
+    if (!userOffset) {
+      return 0;
+    }
+
+    const box = geometry.boundingBox ? geometry.boundingBox.clone() : new THREE.Box3().setFromBufferAttribute(geometry.getAttribute('position') as THREE.BufferAttribute);
+    const size = box.getSize(new THREE.Vector3());
+    const longestEdge = Math.max(size.x, size.y, size.z) || 1;
+
+    // Numerical epsilon to avoid coincident surfaces
+    const epsilon = 0.01; // 10 microns
+    // Limit offset to a small fraction of the tool size to avoid extreme inflation
+    const maxMagnitude = Math.max(longestEdge * 0.02, epsilon); // at most 2% of longest edge
+
+    const raw = userOffset;
+    if (raw > 0) {
+      return Math.min(raw, maxMagnitude);
+    }
+    if (raw < 0) {
+      return Math.max(raw, -maxMagnitude);
+    }
+    return 0;
+  }
+
+  // Build the set of es representing the swept volume for a single tool geometry.
+  // Currently this is the original inflated tool plus an optional shifted copy along the
+  // removal direction by the specified depth. In the future this can be replaced with a
+  // true lofted swept solid without changing the public API.
+  private buildSweptBrushes(toolGeo: THREE.BufferGeometry, dir: THREE.Vector3, depth: number): Brush[] {
+    const brushes: Brush[] = [];
+
+    // Base tool volume at its original position
+    brushes.push(new Brush(toolGeo));
+
+    // Simple directional sweep approximation: subtract a translated copy as well
+    if (depth > 0) {
+      const sweep = toolGeo.clone();
+      const shift = new THREE.Matrix4().makeTranslation(dir.x * depth, dir.y * depth, dir.z * depth);
+      sweep.applyMatrix4(shift);
+      brushes.push(new Brush(sweep));
+    }
+
+    return brushes;
+  }
+
   /**
    * Create a negative space by subtracting fixture components from the base part
    */
@@ -72,6 +136,10 @@ export class CSGEngine {
       angle = 0,
       offset = 0
     } = options;
+    // If there are no fixture components, just return a clone of the base mesh
+    if (!fixtureComponents || fixtureComponents.length === 0) {
+      return baseMesh.clone();
+    }
 
     const dir = removalDirection.clone().normalize();
 
@@ -81,22 +149,24 @@ export class CSGEngine {
     const baseBrush = new Brush(baseGeoWorld);
 
     const toolWorldGeometries: THREE.BufferGeometry[] = fixtureComponents.map((m) => this.cloneWorldGeometry(m));
-    const inflatedTools = toolWorldGeometries.map((g) => this.inflateGeometry(g, offset));
+    const inflatedTools = toolWorldGeometries.map((g) => {
+      const effOffset = this.computeEffectiveOffset(g, offset);
+      return this.inflateGeometry(g, effOffset);
+    });
 
     let resultBrush = baseBrush;
 
-    inflatedTools.forEach((toolGeo) => {
-      const toolBrush = new Brush(toolGeo);
-      resultBrush = this.evaluator.evaluate(resultBrush, toolBrush, SUBTRACTION);
-
-      if (depth > 0) {
-        const sweep = toolGeo.clone();
-        const shift = new THREE.Matrix4().makeTranslation(dir.x * depth, dir.y * depth, dir.z * depth);
-        sweep.applyMatrix4(shift);
-        const sweepBrush = new Brush(sweep);
-        resultBrush = this.evaluator.evaluate(resultBrush, sweepBrush, SUBTRACTION);
-      }
-    });
+    try {
+      inflatedTools.forEach((toolGeo) => {
+        const brushes = this.buildSweptBrushes(toolGeo, dir, depth);
+        brushes.forEach((b) => {
+          resultBrush = this.evaluator.evaluate(resultBrush, b, SUBTRACTION);
+        });
+      });
+    } catch (error) {
+      console.error('CSGEngine.createNegativeSpace failed, returning original base mesh:', error);
+      return baseMesh.clone();
+    }
 
     const resultGeometryWorld = resultBrush.geometry;
     resultGeometryWorld.applyMatrix4(baseWorldInv);
@@ -124,7 +194,9 @@ export class CSGEngine {
     direction: THREE.Vector3 = new THREE.Vector3(0, -1, 0)
   ): THREE.Mesh {
     // Create pocket brush
-    const pocketBrush = new Brush(pocketShape);
+    const pocketGeo = pocketShape.clone();
+    this.ensureUVs(pocketGeo);
+    const pocketBrush = new Brush(pocketGeo);
 
     // Position the pocket
     const matrix = new THREE.Matrix4();
@@ -139,7 +211,9 @@ export class CSGEngine {
     pocketBrush.applyMatrix4(matrix);
 
     // Create base brush
-    const baseBrush = new Brush(baseMesh.geometry.clone());
+    const baseGeo = baseMesh.geometry.clone();
+    this.ensureUVs(baseGeo);
+    const baseBrush = new Brush(baseGeo);
 
     // Perform subtraction
     const resultBrush = this.evaluator.evaluate(baseBrush, pocketBrush, SUBTRACTION);
