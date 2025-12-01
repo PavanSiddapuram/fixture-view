@@ -178,7 +178,8 @@ export const computeSupportMetrics = ({
   }
 
   const minModelY = hitYs.reduce((min, y) => Math.min(min, y), hitYs[0]);
-  const height = Math.max(0.5, minModelY - effectiveBaseY - contactOffset);
+  // Ensure a meaningful stem even when the model rests directly on the baseplate
+  const height = Math.max(5, minModelY - effectiveBaseY - contactOffset);
   return { baseY: effectiveBaseY, height };
 };
 

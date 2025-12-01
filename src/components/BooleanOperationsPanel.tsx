@@ -60,17 +60,17 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
 }) => {
   const [operationState, setOperationState] = useState<OperationState>({
     type: 'subtract',
-    depth: 10,
+    depth: 2,
     angle: 0,
-    offset: 0,
+    offset: 0.5,
     removalDirection: new THREE.Vector3(0, -1, 0),
     preview: false,
     useModel: true,
     useSupports: 'all',
     useAdvancedOffset: true,
     qualityPreset: 'balanced',
-    pixelsPerUnit: 14,
-    simplifyRatio: 0.5,
+    pixelsPerUnit: 10,
+    simplifyRatio: 0.6,
     verifyManifold: true,
     rotationXZ: 0,
     rotationYZ: 0
@@ -287,128 +287,142 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
         <div className="flex-1 p-4">
           <TabsContent value="trim" className="mt-0 h-full">
             <div className="space-y-4">
-              {/* Parameters */}
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Depth: {operationState.depth}mm
+              {/* Options */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium text-sm">Options</h3>
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={operationState.useSupports === 'all'}
+                      onChange={(e) => handleToolSelectionChange('useSupports', e.target.checked ? 'all' : 'none')}
+                    />
+                    <span>Subtract supports</span>
                   </label>
-                  <Slider
-                    value={[operationState.depth]}
-                    onValueChange={([value]) => handleParameterChange('depth', value)}
-                    min={1}
-                    max={50}
-                    step={1}
-                    className="w-full"
-                  />
                 </div>
 
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Angle: {operationState.angle}°
-                  </label>
-                  <Slider
-                    value={[operationState.angle]}
-                    onValueChange={([value]) => handleParameterChange('angle', value)}
-                    min={-90}
-                    max={90}
-                    step={5}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Offset: {operationState.offset}mm
-                  </label>
-                  <Slider
-                    value={[operationState.offset]}
-                    onValueChange={([value]) => handleParameterChange('offset', value)}
-                    min={-20}
-                    max={20}
-                    step={1}
-                    className="w-full"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium mb-2 block">
-                    Removal Direction
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { name: 'Down (-Y)', vec: new THREE.Vector3(0, -1, 0), Icon: ArrowDown },
-                      { name: 'Up (+Y)', vec: new THREE.Vector3(0, 1, 0), Icon: ArrowUp },
-                      { name: 'Left (-X)', vec: new THREE.Vector3(-1, 0, 0), Icon: ArrowLeft },
-                      { name: 'Right (+X)', vec: new THREE.Vector3(1, 0, 0), Icon: ArrowRight },
-                      { name: 'Back (-Z)', vec: new THREE.Vector3(0, 0, -1), Icon: ArrowUpLeft },
-                      { name: 'Forward (+Z)', vec: new THREE.Vector3(0, 0, 1), Icon: ArrowUpRight },
-                    ].map(({ name, vec, Icon }) => {
-                      const isSelected = operationState.removalDirection.equals(vec);
-                      return (
-                        <Button
-                          key={name}
-                          variant={isSelected ? 'default' : 'outline'}
-                          size="sm"
-                          onClick={() => handleParameterChange('removalDirection', vec)}
-                          className="justify-start"
-                        >
-                          <Icon className="w-4 h-4 mr-2" />
-                          {name}
-                        </Button>
-                      );
-                    })}
+                <div className="space-y-2">
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">
+                      Global offset
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1">
+                        <Slider
+                          value={[operationState.offset]}
+                          onValueChange={([value]) => handleParameterChange('offset', value)}
+                          min={-20}
+                          max={20}
+                          step={0.1}
+                          className="w-full"
+                        />
+                      </div>
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground w-20 justify-end">
+                        <input
+                          type="number"
+                          className="w-12 px-1 py-0.5 text-right border border-border/60 rounded bg-background/80"
+                          value={operationState.offset.toFixed(1)}
+                          min={-20}
+                          max={20}
+                          step={0.1}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            if (Number.isNaN(v)) return;
+                            const clamped = Math.min(20, Math.max(-20, v));
+                            handleParameterChange('offset', clamped);
+                          }}
+                        />
+                        <span>mm</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
 
               <Separator />
 
-              {/* Advanced Offset (GPU) */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-medium text-sm">Advanced Offset</h3>
-                    <p className="text-[11px] text-muted-foreground">
-                      GPU offset for model cutter (supports trimming)
-                    </p>
+              {/* Advanced options */}
+              <div className="space-y-4">
+                <div>
+                  <h3 className="font-medium text-sm mb-2">Advanced options</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">
+                        Resolution (sweep depth)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1">
+                          <Slider
+                            value={[operationState.depth]}
+                            onValueChange={([value]) => handleParameterChange('depth', value)}
+                            min={1}
+                            max={50}
+                            step={0.5}
+                            className="w-full"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground w-20 justify-end">
+                          <input
+                            type="number"
+                            className="w-12 px-1 py-0.5 text-right border border-border/60 rounded bg-background/80"
+                            value={operationState.depth.toFixed(1)}
+                            min={1}
+                            max={50}
+                            step={0.5}
+                            onChange={(e) => {
+                              const v = parseFloat(e.target.value);
+                              if (Number.isNaN(v)) return;
+                              const clamped = Math.min(50, Math.max(1, v));
+                              handleParameterChange('depth', clamped);
+                            }}
+                          />
+                          <span>mm</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">
+                        Sweep angle
+                      </label>
+                      <Slider
+                        value={[operationState.angle]}
+                        onValueChange={([value]) => handleParameterChange('angle', value)}
+                        min={-90}
+                        max={90}
+                        step={5}
+                        className="w-full"
+                      />
+                    </div>
                   </div>
-                  <label className="inline-flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      checked={operationState.useAdvancedOffset}
-                      onChange={(e) => handleParameterChange('useAdvancedOffset', e.target.checked)}
-                    />
-                    <span>Enable</span>
-                  </label>
                 </div>
+
+                <Separator />
+
+                {/* Advanced Offset (GPU) */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-medium text-sm">Advanced Offset</h3>
+                      <p className="text-[11px] text-muted-foreground">
+                        GPU offset for model cutter (supports trimming)
+                      </p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={operationState.useAdvancedOffset}
+                        onChange={(e) => handleParameterChange('useAdvancedOffset', e.target.checked)}
+                      />
+                      <span>Enable</span>
+                    </label>
+                  </div>
 
                 {operationState.useAdvancedOffset && (
                   <div className="space-y-3 border border-border/40 rounded-md p-3 bg-muted/40">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex-1">
-                        <label className="text-xs font-medium mb-1 block">
-                          Quality preset
-                        </label>
-                        <Select
-                          value={operationState.qualityPreset}
-                          onValueChange={(value) => applyQualityPreset(value as 'fast' | 'balanced' | 'high')}
-                        >
-                          <SelectTrigger className="h-7 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="fast">Fast</SelectItem>
-                            <SelectItem value="balanced">Balanced</SelectItem>
-                            <SelectItem value="high">High quality</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="text-[11px] text-muted-foreground text-right w-28">
-                        <div>px/unit: {operationState.pixelsPerUnit}</div>
-                        <div>simplify: {(operationState.simplifyRatio ?? 0.5).toFixed(2)}</div>
-                      </div>
-                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Uses a balanced GPU offset (10 px/unit, moderate simplification) for the model cutter.
+                    </p>
 
                     <label className="inline-flex items-center gap-2 text-xs">
                       <input
@@ -420,6 +434,7 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
                     </label>
                   </div>
                 )}
+              </div>
               </div>
               {/* Action Button */}
               <div className="space-y-2 pt-2">

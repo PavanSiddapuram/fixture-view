@@ -97,20 +97,34 @@ export class CSGEngine {
     return 0;
   }
 
-  // Build the set of es representing the swept volume for a single tool geometry.
-  // Currently this is the original inflated tool plus an optional shifted copy along the
-  // removal direction by the specified depth. In the future this can be replaced with a
-  // true lofted swept solid without changing the public API.
+  // Build the set of brushes representing the swept volume for a single tool geometry.
+  // We approximate the sweep by sampling multiple translated copies of the (inflated) tool
+  // along the removal direction up to the specified depth. This is still an approximation,
+  // but using several segments makes the subtraction much more precise than a single
+  // start/end pair, while keeping the number of CSG evaluations bounded.
   private buildSweptBrushes(toolGeo: THREE.BufferGeometry, dir: THREE.Vector3, depth: number): Brush[] {
     const brushes: Brush[] = [];
 
-    // Base tool volume at its original position
-    brushes.push(new Brush(toolGeo));
+    // Always normalize direction so depth is in mm units
+    const nDir = dir.clone().normalize();
 
-    // Simple directional sweep approximation: subtract a translated copy as well
-    if (depth > 0) {
+    // No sweep: just use the base tool
+    if (depth <= 0) {
+      brushes.push(new Brush(toolGeo));
+      return brushes;
+    }
+
+    // Choose a small, bounded number of segments so we don't explode CSG cost,
+    // but still get fine sampling for shallow sweeps (e.g. 2 mm resolution).
+    const maxSegments = 12;
+    const minSegmentLength = 0.25; // mm
+    const approxSegments = Math.ceil(depth / minSegmentLength);
+    const segments = Math.max(1, Math.min(maxSegments, approxSegments));
+
+    for (let i = 0; i <= segments; i++) {
+      const t = (depth * i) / segments;
       const sweep = toolGeo.clone();
-      const shift = new THREE.Matrix4().makeTranslation(dir.x * depth, dir.y * depth, dir.z * depth);
+      const shift = new THREE.Matrix4().makeTranslation(nDir.x * t, nDir.y * t, nDir.z * t);
       sweep.applyMatrix4(shift);
       brushes.push(new Brush(sweep));
     }

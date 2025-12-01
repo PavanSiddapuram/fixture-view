@@ -66,7 +66,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
     const cz = pts.reduce((sum, v) => sum + v.y, 0) / pts.length;
     const centerV = new THREE.Vector2(cx, cz);
     const polygon = pts.map(v => [v.x - cx, v.y - cz] as [number, number]);
-    const baseHeight = Number(initParams?.height ?? 6);
+    const baseHeight = Number(initParams?.height ?? 5);
     const support = {
       id: `sup-${Date.now()}`,
       type: 'custom',
@@ -113,7 +113,7 @@ const SupportPlacement: React.FC<SupportPlacementProps> = ({ active, type, initP
       conicalFootprint.topRadius = Number(initParams?.topRadius ?? 0);
     }
     const metrics = computeMetrics(footprint);
-    const height = metrics?.height ?? Number(initParams?.height ?? 6);
+    const height = metrics?.height ?? Number(initParams?.height ?? 5);
     const baseY = metrics?.baseY ?? baseTopY;
     if (type === 'cylindrical') {
       const radius = Number(initParams?.radius ?? dist);

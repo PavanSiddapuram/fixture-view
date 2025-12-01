@@ -659,6 +659,7 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   const [placing, setPlacing] = useState<{ active: boolean; type: SupportType | null; initParams?: Record<string, number> }>({ active: false, type: null });
   const [supports, setSupports] = useState<AnySupport[]>([]);
   const [supportsTrimPreview, setSupportsTrimPreview] = useState<THREE.Mesh[]>([]);
+  const [supportsTrimProcessing, setSupportsTrimProcessing] = useState(false);
   const [cavityPreview, setCavityPreview] = useState<THREE.Mesh | null>(null);
   const editingSupportRef = useRef<AnySupport | null>(null);
   const [editingSupport, setEditingSupport] = useState<AnySupport | null>(null);
@@ -1087,80 +1088,97 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handler = async (e: CustomEvent) => {
       const { depth, offset, removalDirection, useModel, useAdvancedOffset, advancedOffsetOptions } = e.detail || {};
-      if (!useModel) {
-        setSupportsTrimPreview([]);
-        return;
-      }
-
-      const modelMesh = modelMeshRef.current;
-      if (!modelMesh || supports.length === 0) {
-        setSupportsTrimPreview([]);
-        return;
-      }
-
-      const engine = csgEngineRef.current;
-      if (!engine) {
-        setSupportsTrimPreview([]);
-        return;
-      }
-
-      const dir = (removalDirection instanceof THREE.Vector3)
-        ? removalDirection.clone().normalize()
-        : new THREE.Vector3(0, -1, 0);
-
-      let cutterMesh: THREE.Mesh | null = modelMesh;
-
-      if (useAdvancedOffset && advancedOffsetOptions) {
-        try {
-          const vertices = extractVertices(modelMesh.geometry as THREE.BufferGeometry);
-          const result = await createOffsetMesh(vertices, {
-            offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
-            pixelsPerUnit: advancedOffsetOptions.pixelsPerUnit ?? 10,
-            simplifyRatio: advancedOffsetOptions.simplifyRatio ?? null,
-            verifyManifold: advancedOffsetOptions.verifyManifold ?? true,
-            rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
-            rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
-          });
-          cutterMesh = new THREE.Mesh(result.geometry, (modelMesh.material as THREE.Material));
-        } catch (err) {
-          console.error('Advanced offset failed, falling back to normal trimming:', err);
-          cutterMesh = modelMesh;
+      setSupportsTrimProcessing(true);
+      try {
+        if (!useModel) {
+          setSupportsTrimPreview([]);
+          return;
         }
-      }
 
-      const previewMeshes: THREE.Mesh[] = [];
+        const modelMesh = modelMeshRef.current;
+        if (!modelMesh || supports.length === 0) {
+          setSupportsTrimPreview([]);
+          return;
+        }
 
-      supports.forEach((s) => {
-        const baseMesh = buildSupportMesh(s, baseTopY);
-        if (!baseMesh || !cutterMesh) return;
+        const engine = csgEngineRef.current;
+        if (!engine) {
+          setSupportsTrimPreview([]);
+          return;
+        }
 
-        try {
-          const result = engine.createNegativeSpace(
-            baseMesh,
-            [cutterMesh],
-            dir,
-            {
-              depth: typeof depth === 'number' ? depth : 10,
-              angle: 0,
-              // When using advanced offset the cutter is already inflated; avoid double-inflation
-              offset: useAdvancedOffset ? 0 : (typeof offset === 'number' ? offset : 0),
-            }
-          );
+        const dir = (removalDirection instanceof THREE.Vector3)
+          ? removalDirection.clone().normalize()
+          : new THREE.Vector3(0, -1, 0);
 
-          if (result && result.isMesh) {
-            if (result.material && 'transparent' in result.material) {
-              (result.material as any).transparent = true;
-              (result.material as any).opacity = 0.45;
-              (result.material as any).depthWrite = false;
-            }
-            previewMeshes.push(result as THREE.Mesh);
+        let cutterMesh: THREE.Mesh | null = modelMesh;
+
+        if (useAdvancedOffset && advancedOffsetOptions) {
+          try {
+            const vertices = extractVertices(modelMesh.geometry as THREE.BufferGeometry);
+            const result = await createOffsetMesh(vertices, {
+              offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
+              pixelsPerUnit: advancedOffsetOptions.pixelsPerUnit ?? 10,
+              simplifyRatio: advancedOffsetOptions.simplifyRatio ?? null,
+              verifyManifold: advancedOffsetOptions.verifyManifold ?? true,
+              rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
+              rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
+            });
+            cutterMesh = new THREE.Mesh(result.geometry, modelMesh.material as THREE.Material);
+          } catch (err) {
+            console.error('Advanced offset failed, falling back to normal trimming:', err);
+            cutterMesh = modelMesh;
           }
-        } catch (err) {
-          console.error('Error computing trimmed support preview:', err);
         }
-      });
 
-      setSupportsTrimPreview(previewMeshes);
+        const previewMeshes: THREE.Mesh[] = [];
+
+        supports.forEach((s) => {
+          const baseMesh = buildSupportMesh(s, baseTopY);
+          if (!baseMesh || !cutterMesh) return;
+
+          try {
+            const result = engine.createNegativeSpace(
+              baseMesh,
+              [cutterMesh],
+              dir,
+              {
+                depth: typeof depth === 'number' ? depth : 10,
+                angle: 0,
+                offset: useAdvancedOffset ? 0 : (typeof offset === 'number' ? offset : 0),
+              }
+            );
+
+            if (result && result.isMesh) {
+              // Derive preview color from the original support material so the
+              // trimmed geometry visually reads as the same support, just in a
+              // translucent highlight, instead of inheriting the model color.
+              let previewColor = new THREE.Color(0x6b7280);
+              const baseMat = baseMesh.material as any;
+              if (baseMat && baseMat.color && baseMat.color.isColor) {
+                previewColor = baseMat.color.clone();
+              }
+
+              const previewMaterial = new THREE.MeshStandardMaterial({
+                color: previewColor,
+                transparent: true,
+                opacity: 0.6,
+                roughness: 0.5,
+                metalness: 0.1,
+                depthWrite: false,
+              });
+              (result as THREE.Mesh).material = previewMaterial;
+              previewMeshes.push(result as THREE.Mesh);
+            }
+          } catch (err) {
+            console.error('Error computing trimmed support preview:', err);
+          }
+        });
+
+        setSupportsTrimPreview(previewMeshes);
+      } finally {
+        setSupportsTrimProcessing(false);
+      }
     };
 
     window.addEventListener('supports-trim-request', handler as EventListener);
@@ -1476,10 +1494,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
         />
       ))}
 
-      {/* Persistent supports */}
-      {supports.map((s) => (
-        <SupportMesh key={s.id} support={s} baseTopY={baseTopY} />
-      ))}
+      {/* Supports vs trimmed supports preview */}
+      {supportsTrimPreview.length === 0
+        ? supports.map((s) => (
+            <SupportMesh key={s.id} support={s} baseTopY={baseTopY} />
+          ))
+        : supportsTrimPreview.map((mesh, idx) => (
+            <primitive key={mesh.uuid + '-' + idx} object={mesh} />
+          ))}
 
       {/* Handle-based support editing overlay */}
       {editingSupport && (
@@ -1561,6 +1583,21 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           }
         }}
       />
+
+      {/* Processing indicator for GPU offset + support trimming */}
+      {supportsTrimProcessing && (
+        <Html
+          center
+          style={{
+            pointerEvents: 'none',
+          }}
+        >
+          <div className="inline-flex items-center gap-2 rounded-full bg-slate-900/75 px-3 py-1 text-[11px] text-slate-100 border border-slate-500/70 shadow-md">
+            <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-slate-400 border-t-slate-100 animate-spin" />
+            <span>Trimming supports a0...</span>
+          </div>
+        </Html>
+      )}
 
     </>
   );
