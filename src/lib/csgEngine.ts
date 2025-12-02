@@ -114,10 +114,11 @@ export class CSGEngine {
       return brushes;
     }
 
-    // Choose a small, bounded number of segments so we don't explode CSG cost,
-    // but still get fine sampling for shallow sweeps (e.g. 2 mm resolution).
-    const maxSegments = 12;
-    const minSegmentLength = 0.25; // mm
+    // Choose a small, bounded number of segments so we don't explode CSG cost.
+    // With the local trim band (typically ~2 mm) even a coarser sampling still
+    // produces a precise result while greatly reducing the amount of CSG work.
+    const maxSegments = 8;
+    const minSegmentLength = 0.5; // mm
     const approxSegments = Math.ceil(depth / minSegmentLength);
     const segments = Math.max(1, Math.min(maxSegments, approxSegments));
 

@@ -1115,16 +1115,39 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
         if (useAdvancedOffset && advancedOffsetOptions) {
           try {
-            const vertices = extractVertices(modelMesh.geometry as THREE.BufferGeometry);
-            const result = await createOffsetMesh(vertices, {
-              offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
-              pixelsPerUnit: advancedOffsetOptions.pixelsPerUnit ?? 10,
-              simplifyRatio: advancedOffsetOptions.simplifyRatio ?? null,
-              verifyManifold: advancedOffsetOptions.verifyManifold ?? true,
-              rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
-              rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
-            });
-            cutterMesh = new THREE.Mesh(result.geometry, modelMesh.material as THREE.Material);
+            const geo = modelMesh.geometry as THREE.BufferGeometry;
+            geo.computeBoundingBox();
+            const box = geo.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geo.getAttribute('position') as THREE.BufferAttribute);
+            const size = box.getSize(new THREE.Vector3());
+            const span = Math.max(size.x, size.z);
+
+            // Clamp pixelsPerUnit to a safe upper bound and estimate the
+            // heightmap resolution. If the target resolution is too large,
+            // skip GPU offset and fall back to the raw model to avoid
+            // exhausting WebGL resources.
+            const requestedPPU = advancedOffsetOptions.pixelsPerUnit ?? 6;
+            const safePPU = Math.min(requestedPPU, 8);
+            const estimatedPixels = span * safePPU;
+
+            if (!Number.isFinite(estimatedPixels) || estimatedPixels > 1600) {
+              console.warn('Skipping GPU offset for supports trim: target resolution too large', {
+                span,
+                safePPU,
+                estimatedPixels,
+              });
+              cutterMesh = modelMesh;
+            } else {
+              const vertices = extractVertices(geo);
+              const result = await createOffsetMesh(vertices, {
+                offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
+                pixelsPerUnit: safePPU,
+                simplifyRatio: advancedOffsetOptions.simplifyRatio ?? 0.8,
+                verifyManifold: advancedOffsetOptions.verifyManifold ?? false,
+                rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
+                rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
+              });
+              cutterMesh = new THREE.Mesh(result.geometry, modelMesh.material as THREE.Material);
+            }
           } catch (err) {
             console.error('Advanced offset failed, falling back to normal trimming:', err);
             cutterMesh = modelMesh;
@@ -1137,13 +1160,22 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           const baseMesh = buildSupportMesh(s, baseTopY);
           if (!baseMesh || !cutterMesh) return;
 
+          // Option A: only trim in a local band measured from the top of the
+          // support downward by at most the requested Resolution (depth).
+          // This keeps the effective sweep confined near the model contact
+          // region even when supports are much taller than the model.
+          const supportHeight = (s as any).height ?? 0;
+          const requestedDepth = typeof depth === 'number' ? depth : 10;
+          const maxLocalDepth = supportHeight > 0 ? supportHeight : requestedDepth;
+          const effectiveDepth = Math.max(0, Math.min(requestedDepth, maxLocalDepth));
+
           try {
             const result = engine.createNegativeSpace(
               baseMesh,
               [cutterMesh],
               dir,
               {
-                depth: typeof depth === 'number' ? depth : 10,
+                depth: effectiveDepth,
                 angle: 0,
                 offset: useAdvancedOffset ? 0 : (typeof offset === 'number' ? offset : 0),
               }

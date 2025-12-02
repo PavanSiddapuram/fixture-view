@@ -67,11 +67,14 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
     preview: false,
     useModel: true,
     useSupports: 'all',
-    useAdvancedOffset: true,
+    // Default to classic trimming (no GPU offset). Users can opt in to
+    // GPU Advanced Offset when they specifically need it.
+    useAdvancedOffset: false,
     qualityPreset: 'balanced',
-    pixelsPerUnit: 10,
-    simplifyRatio: 0.6,
-    verifyManifold: true,
+    // Lighter default GPU config when it is enabled.
+    pixelsPerUnit: 8,
+    simplifyRatio: 0.7,
+    verifyManifold: false,
     rotationXZ: 0,
     rotationYZ: 0
   });
@@ -421,7 +424,9 @@ const BooleanOperationsPanel: React.FC<BooleanOperationsPanelProps> = ({
                 {operationState.useAdvancedOffset && (
                   <div className="space-y-3 border border-border/40 rounded-md p-3 bg-muted/40">
                     <p className="text-[11px] text-muted-foreground">
-                      Uses a balanced GPU offset (10 px/unit, moderate simplification) for the model cutter.
+                      Uses a GPU offset for the model cutter with a performance-oriented
+                      configuration (around 8 px/unit, extra simplification). Enable only
+                      when you need additional clearance around complex workpieces.
                     </p>
 
                     <label className="inline-flex items-center gap-2 text-xs">
