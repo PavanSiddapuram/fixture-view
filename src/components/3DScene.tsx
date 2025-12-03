@@ -1088,7 +1088,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   React.useEffect(() => {
     const handler = async (e: CustomEvent) => {
       const { depth, offset, removalDirection, useModel, useAdvancedOffset, advancedOffsetOptions } = e.detail || {};
+      const MIN_SPINNER_MS = 800;
+      const startTime = performance.now();
       setSupportsTrimProcessing(true);
+      // Yield once so React can render the spinner before heavy CSG work
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       try {
         if (!useModel) {
           setSupportsTrimPreview([]);
@@ -1209,6 +1213,11 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
         setSupportsTrimPreview(previewMeshes);
       } finally {
+        const elapsed = performance.now() - startTime;
+        const remaining = MIN_SPINNER_MS - elapsed;
+        if (remaining > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+        }
         setSupportsTrimProcessing(false);
       }
     };
@@ -1622,11 +1631,14 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           center
           style={{
             pointerEvents: 'none',
+            zIndex: 9999,
           }}
         >
-          <div className="inline-flex items-center gap-2 rounded-full bg-slate-900/75 px-3 py-1 text-[11px] text-slate-100 border border-slate-500/70 shadow-md">
-            <span className="inline-block w-2.5 h-2.5 rounded-full border-2 border-slate-400 border-t-slate-100 animate-spin" />
-            <span>Trimming supports a0...</span>
+          <div className="flex flex-col items-center gap-2">
+            <div className="w-10 h-10 rounded-full border-4 border-sky-300 border-t-sky-600 animate-spin shadow-md bg-white/10" />
+            <span className="text-[11px] font-medium text-sky-200 drop-shadow-sm">
+              Trimming supports...
+            </span>
           </div>
         </Html>
       )}
