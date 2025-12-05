@@ -29,94 +29,56 @@ const computeDominantUpQuaternion = (geometry: THREE.BufferGeometry) => {
     return null;
   }
 
-  const normalsMap = new Map<string, { normal: THREE.Vector3; area: number }>();
   const up = new THREE.Vector3(0, 1, 0);
-  const vA = new THREE.Vector3();
-  const vB = new THREE.Vector3();
-  const vC = new THREE.Vector3();
-  const cb = new THREE.Vector3();
-  const ab = new THREE.Vector3();
+  const candidates: THREE.Vector3[] = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1),
+  ];
 
-  const accumulateNormal = (normal: THREE.Vector3, area: number) => {
-    if (!Number.isFinite(area) || area <= 1e-6) {
-      return;
+  const v = new THREE.Vector3();
+  const transformed = new THREE.Vector3();
+
+  let bestDir: THREE.Vector3 | null = null;
+  let bestHeight = Infinity;
+
+  for (const candidateUp of candidates) {
+    const q = new THREE.Quaternion().setFromUnitVectors(candidateUp, up);
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (let i = 0; i < positionAttribute.count; i++) {
+      v.fromBufferAttribute(positionAttribute, i);
+      transformed.copy(v).applyQuaternion(q);
+      const y = transformed.y;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
     }
 
-    const dir = normal.clone().normalize();
-    if (!Number.isFinite(dir.x) || !Number.isFinite(dir.y) || !Number.isFinite(dir.z)) {
-      return;
+    if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+      continue;
     }
 
-    const key = `${Math.round(dir.x * 25)},${Math.round(dir.y * 25)},${Math.round(dir.z * 25)}`;
-    const entry = normalsMap.get(key);
-    if (entry) {
-      entry.normal.addScaledVector(dir, area);
-      entry.area += area;
-    } else {
-      normalsMap.set(key, { normal: dir.clone().multiplyScalar(area), area });
-    }
-  };
-
-  const index = geometry.index;
-  if (index) {
-    for (let i = 0; i < index.count; i += 3) {
-      const a = index.getX(i);
-      const b = index.getX(i + 1);
-      const c = index.getX(i + 2);
-
-      vA.fromBufferAttribute(positionAttribute, a);
-      vB.fromBufferAttribute(positionAttribute, b);
-      vC.fromBufferAttribute(positionAttribute, c);
-
-      cb.subVectors(vC, vB);
-      ab.subVectors(vA, vB);
-      const normal = cb.cross(ab);
-      const area = normal.length() * 0.5;
-      if (area > 0) {
-        accumulateNormal(normal, area);
-      }
-    }
-  } else {
-    for (let i = 0; i < positionAttribute.count; i += 3) {
-      vA.fromBufferAttribute(positionAttribute, i);
-      vB.fromBufferAttribute(positionAttribute, i + 1);
-      vC.fromBufferAttribute(positionAttribute, i + 2);
-
-      cb.subVectors(vC, vB);
-      ab.subVectors(vA, vB);
-      const normal = cb.cross(ab);
-      const area = normal.length() * 0.5;
-      if (area > 0) {
-        accumulateNormal(normal, area);
-      }
+    const height = maxY - minY;
+    if (height < bestHeight) {
+      bestHeight = height;
+      bestDir = candidateUp.clone();
     }
   }
 
-  let bestEntry: { normal: THREE.Vector3; area: number } | null = null;
-  normalsMap.forEach(entry => {
-    if (!bestEntry || entry.area > bestEntry.area) {
-      bestEntry = { normal: entry.normal.clone(), area: entry.area };
-    }
-  });
-
-  if (!bestEntry) {
+  if (!bestDir || !isFinite(bestHeight)) {
     return null;
   }
 
-  const dominantNormal = bestEntry.normal.normalize();
-  if (dominantNormal.lengthSq() < 1e-6) {
+  // If the current +Y is already one of the flattest orientations, no change.
+  if (bestDir.equals(up)) {
     return null;
   }
 
-  if (dominantNormal.y < 0) {
-    dominantNormal.negate();
-  }
-
-  if (dominantNormal.angleTo(up) < 1e-3) {
-    return null;
-  }
-
-  const quaternion = new THREE.Quaternion().setFromUnitVectors(dominantNormal, up);
+  const quaternion = new THREE.Quaternion().setFromUnitVectors(bestDir, up);
   return quaternion;
 };
 
@@ -243,8 +205,10 @@ const getFootprintMetrics = (bounds: BoundsSummary | null) => {
   const sizeX = Math.max(bounds.size.x, 0) * unitsScale;
   const sizeZ = Math.max(bounds.size.z, 0) * unitsScale;
   const longestHalfEdge = Math.max(sizeX, sizeZ) * 0.5;
-  const padding = Math.max(longestHalfEdge * 0.35, 5);
-  const halfLength = Math.max(longestHalfEdge + padding, longestHalfEdge + 5, longestHalfEdge * 1.5, 36);
+  const padding = Math.max(longestHalfEdge * 0.5, 8);
+  // Ensure the cross axes are always noticeably larger than the model
+  // footprint so they frame the part clearly from any view.
+  const halfLength = Math.max(longestHalfEdge * 1.8, longestHalfEdge + padding, 48);
 
   return { radius: longestHalfEdge, padding, halfLength };
 };
@@ -568,7 +532,16 @@ function ModelMesh({ file, meshRef, dimensions, colorsMap, setColorsMap, onBound
       mesh.updateMatrixWorld(true, true);
     }
 
-    const finalBox = new THREE.Box3().setFromObject(mesh);
+    // After all transforms, make sure the model rests exactly on the XY plane
+    // in world space so it visually "sits" on the ground and on the center
+    // cross, regardless of original STL offsets.
+    let finalBox = new THREE.Box3().setFromObject(mesh);
+    if (Number.isFinite(finalBox.min.y) && finalBox.min.y !== 0) {
+      const deltaY = finalBox.min.y;
+      mesh.position.y -= deltaY;
+      mesh.updateMatrixWorld(true, true);
+      finalBox = new THREE.Box3().setFromObject(mesh);
+    }
     const sphere = finalBox.getBoundingSphere(new THREE.Sphere());
     const finalCenter = finalBox.getCenter(new THREE.Vector3());
     const finalSize = finalBox.getSize(new THREE.Vector3());
@@ -649,6 +622,16 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
   } | null>(null);
   const modelMeshRef = useRef<THREE.Mesh>(null);
   const basePlateMeshRef = useRef<THREE.Mesh>(null);
+  const offsetModelGeometryRef = useRef<THREE.BufferGeometry | null>(null);
+  const offsetModelMeshRef = useRef<THREE.Mesh | null>(null);
+  const offsetModelConfigRef = useRef<{
+    offsetDistance: number;
+    pixelsPerUnit: number;
+    simplifyRatio: number | null;
+    verifyManifold: boolean;
+    rotationXZ: number;
+    rotationYZ: number;
+  } | null>(null);
   const [baseTopY, setBaseTopY] = useState<number>(0);
   const [modelDimensions, setModelDimensions] = useState<{ x?: number; y?: number; z?: number } | undefined>();
   const [orbitControlsEnabled, setOrbitControlsEnabled] = useState(true);
@@ -1117,40 +1100,83 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
 
         let cutterMesh: THREE.Mesh | null = modelMesh;
 
+        // When Advanced Offset is enabled, generate a GPU offset mesh and
+        // cache it, but regenerate if the key configuration changes so that
+        // offset/resolution tweaks are reflected in the cutter. For very
+        // large models or many supports, we automatically skip GPU offset to
+        // keep the UI responsive.
         if (useAdvancedOffset && advancedOffsetOptions) {
           try {
             const geo = modelMesh.geometry as THREE.BufferGeometry;
             geo.computeBoundingBox();
-            const box = geo.boundingBox ?? new THREE.Box3().setFromBufferAttribute(geo.getAttribute('position') as THREE.BufferAttribute);
-            const size = box.getSize(new THREE.Vector3());
-            const span = Math.max(size.x, size.z);
+            const triangles = (geo.index ? geo.index.count : (geo.getAttribute('position') as THREE.BufferAttribute | undefined)?.count ?? 0) / 3;
+            const tooManyTriangles = triangles > 150_000;
+            const tooManySupports = supports.length > 20;
 
-            // Clamp pixelsPerUnit to a safe upper bound and estimate the
-            // heightmap resolution. If the target resolution is too large,
-            // skip GPU offset and fall back to the raw model to avoid
-            // exhausting WebGL resources.
-            const requestedPPU = advancedOffsetOptions.pixelsPerUnit ?? 6;
-            const safePPU = Math.min(requestedPPU, 8);
-            const estimatedPixels = span * safePPU;
-
-            if (!Number.isFinite(estimatedPixels) || estimatedPixels > 1600) {
-              console.warn('Skipping GPU offset for supports trim: target resolution too large', {
-                span,
-                safePPU,
-                estimatedPixels,
+            if (tooManyTriangles || tooManySupports) {
+              console.warn('Skipping GPU offset for supports trim: scene too heavy for reliable GPU mode', {
+                triangles,
+                supports: supports.length,
               });
-              cutterMesh = modelMesh;
             } else {
-              const vertices = extractVertices(geo);
-              const result = await createOffsetMesh(vertices, {
+              const requestedPPU = advancedOffsetOptions.pixelsPerUnit ?? 6;
+              const safePPU = Math.min(requestedPPU, 4); // more conservative upper bound
+              const config = {
                 offsetDistance: advancedOffsetOptions.offsetDistance ?? (Math.abs(offset) || 0.2),
                 pixelsPerUnit: safePPU,
                 simplifyRatio: advancedOffsetOptions.simplifyRatio ?? 0.8,
                 verifyManifold: advancedOffsetOptions.verifyManifold ?? false,
                 rotationXZ: advancedOffsetOptions.rotationXZ ?? 0,
                 rotationYZ: advancedOffsetOptions.rotationYZ ?? 0,
-              });
-              cutterMesh = new THREE.Mesh(result.geometry, modelMesh.material as THREE.Material);
+              };
+
+              const prevConfig = offsetModelConfigRef.current;
+              const configChanged =
+                !prevConfig ||
+                prevConfig.offsetDistance !== config.offsetDistance ||
+                prevConfig.pixelsPerUnit !== config.pixelsPerUnit ||
+                prevConfig.simplifyRatio !== config.simplifyRatio ||
+                prevConfig.verifyManifold !== config.verifyManifold ||
+                prevConfig.rotationXZ !== config.rotationXZ ||
+                prevConfig.rotationYZ !== config.rotationYZ;
+
+              if (!offsetModelMeshRef.current || configChanged) {
+                const box = geo.boundingBox ?? new THREE.Box3().setFromBufferAttribute(
+                  geo.getAttribute('position') as THREE.BufferAttribute
+                );
+                const size = box.getSize(new THREE.Vector3());
+                const span = Math.max(size.x, size.z);
+
+                const estimatedPixels = span * safePPU;
+
+                if (!Number.isFinite(estimatedPixels) || estimatedPixels > 1600) {
+                  console.warn('Skipping GPU offset for supports trim: target resolution too large', {
+                    span,
+                    safePPU,
+                    estimatedPixels,
+                  });
+                } else {
+                  const vertices = extractVertices(geo);
+                  const result = await createOffsetMesh(vertices, {
+                    offsetDistance: config.offsetDistance,
+                    pixelsPerUnit: config.pixelsPerUnit,
+                    simplifyRatio: config.simplifyRatio ?? undefined,
+                    verifyManifold: config.verifyManifold,
+                    rotationXZ: config.rotationXZ,
+                    rotationYZ: config.rotationYZ,
+                  });
+                  offsetModelGeometryRef.current = result.geometry;
+                  offsetModelMeshRef.current = new THREE.Mesh(
+                    result.geometry,
+                    modelMesh.material as THREE.Material,
+                  );
+                  offsetModelConfigRef.current = config;
+                }
+              }
+
+              if (offsetModelMeshRef.current) {
+                cutterMesh = offsetModelMeshRef.current;
+              }
             }
           } catch (err) {
             console.error('Advanced offset failed, falling back to normal trimming:', err);
@@ -1164,14 +1190,34 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
           const baseMesh = buildSupportMesh(s, baseTopY);
           if (!baseMesh || !cutterMesh) return;
 
-          // Option A: only trim in a local band measured from the top of the
-          // support downward by at most the requested Resolution (depth).
-          // This keeps the effective sweep confined near the model contact
-          // region even when supports are much taller than the model.
           const supportHeight = (s as any).height ?? 0;
           const requestedDepth = typeof depth === 'number' ? depth : 10;
-          const maxLocalDepth = supportHeight > 0 ? supportHeight : requestedDepth;
-          const effectiveDepth = Math.max(0, Math.min(requestedDepth, maxLocalDepth));
+          // Let the Resolution/depth slider truly control how far the
+          // subtraction sweeps, but never beyond the actual support height.
+          // This way, smaller depths create a shallow trim band and larger
+          // depths approach a full-height cut, up to the support's height.
+          const maxDepth = supportHeight > 0 ? supportHeight : requestedDepth;
+          const effectiveDepth = Math.min(Math.max(requestedDepth, 0.1), maxDepth || 10);
+
+          // Build a world-space column AABB around this support so CSG only
+          // considers the portion of the model directly above/around it.
+          baseMesh.updateMatrixWorld(true);
+          const supportBox = new THREE.Box3().setFromObject(baseMesh);
+          const marginXY = 1.0;
+          const marginY = 0.5;
+          const topY = supportBox.max.y;
+          const bandBottomY = topY - effectiveDepth;
+
+          const localMin = new THREE.Vector3(
+            supportBox.min.x - marginXY,
+            bandBottomY - marginY,
+            supportBox.min.z - marginXY,
+          );
+          const localMax = new THREE.Vector3(
+            supportBox.max.x + marginXY,
+            topY + marginY,
+            supportBox.max.z + marginXY,
+          );
 
           try {
             const result = engine.createNegativeSpace(
@@ -1182,10 +1228,39 @@ const ThreeDScene: React.FC<ThreeDSceneProps> = ({
                 depth: effectiveDepth,
                 angle: 0,
                 offset: useAdvancedOffset ? 0 : (typeof offset === 'number' ? offset : 0),
+                localBounds: { min: localMin, max: localMax },
               }
             );
 
             if (result && result.isMesh) {
+              // Normalize the trimmed result so that its height matches the
+              // original support's height. This keeps support height
+              // constant; only the XY footprint changes from trimming.
+              const originalHeight = supportHeight;
+              if (originalHeight > 0) {
+                result.updateMatrixWorld(true, true);
+                const box = new THREE.Box3().setFromObject(result);
+                const currentHeight = box.max.y - box.min.y;
+                if (Number.isFinite(currentHeight) && currentHeight > 0) {
+                  const geom = result.geometry as THREE.BufferGeometry;
+                  // Bring geometry to local origin at its base
+                  geom.computeBoundingBox();
+                  const gBox = geom.boundingBox;
+                  if (gBox) {
+                    const gMinY = gBox.min.y;
+                    geom.translate(0, -gMinY, 0);
+                  }
+                  const scaleY = originalHeight / currentHeight;
+                  geom.scale(1, scaleY, 1);
+                  geom.computeBoundingBox();
+                  geom.computeBoundingSphere();
+                  // Reposition mesh so its baseY matches the original
+                  const targetBaseY = (s as any).baseY ?? baseTopY;
+                  result.position.y = targetBaseY;
+                  result.updateMatrixWorld(true, true);
+                }
+              }
+
               // Derive preview color from the original support material so the
               // trimmed geometry visually reads as the same support, just in a
               // translucent highlight, instead of inheriting the model color.

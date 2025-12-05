@@ -43,11 +43,19 @@ export class CSGEngine {
     geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
   }
 
+  // Ensure geometry has a normal attribute; if missing, compute vertex normals.
+  private ensureNormals(geometry: THREE.BufferGeometry): void {
+    if (!geometry.getAttribute('normal')) {
+      geometry.computeVertexNormals();
+    }
+  }
+
   private cloneWorldGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
     const geo = mesh.geometry.clone();
     const m = mesh.matrixWorld.clone();
     geo.applyMatrix4(m);
     this.ensureUVs(geo);
+    this.ensureNormals(geo);
     return geo;
   }
 
@@ -144,18 +152,27 @@ export class CSGEngine {
       depth?: number;
       angle?: number;
       offset?: number;
+      localBounds?: { min: THREE.Vector3; max: THREE.Vector3 };
     } = {}
   ): THREE.Mesh {
     const {
       depth = 10,
       angle = 0,
-      offset = 0
+      offset = 0,
+      localBounds,
     } = options;
     // If there are no fixture components, just return a clone of the base mesh
     if (!fixtureComponents || fixtureComponents.length === 0) {
       return baseMesh.clone();
     }
-
+    
+    // If the effective sweep depth is zero or negative, treat this as a
+    // no-op for safety. Callers (like the support trim band logic) already
+    // clamp depth per support; this guard ensures we never attempt to build
+    // swept brushes with a non-positive span.
+    if (!Number.isFinite(depth) || depth <= 0) {
+      return baseMesh.clone();
+    }
     const dir = removalDirection.clone().normalize();
 
     const baseWorld = baseMesh.matrixWorld.clone();
@@ -163,11 +180,16 @@ export class CSGEngine {
     const baseGeoWorld = this.cloneWorldGeometry(baseMesh);
     const baseBrush = new Brush(baseGeoWorld);
 
-    const toolWorldGeometries: THREE.BufferGeometry[] = fixtureComponents.map((m) => this.cloneWorldGeometry(m));
-    const inflatedTools = toolWorldGeometries.map((g) => {
-      const effOffset = this.computeEffectiveOffset(g, offset);
-      return this.inflateGeometry(g, effOffset);
-    });
+    const toolWorldGeometries: THREE.BufferGeometry[] = fixtureComponents
+      .map((m) => this.cloneWorldGeometry(m))
+      .map((geo) => this.clipGeometryToBounds(geo, localBounds));
+
+    const inflatedTools = toolWorldGeometries
+      .filter((g) => g.getAttribute('position') && (g.getAttribute('position') as THREE.BufferAttribute).count > 0)
+      .map((g) => {
+        const effOffset = this.computeEffectiveOffset(g, offset);
+        return this.inflateGeometry(g, effOffset);
+      });
 
     let resultBrush = baseBrush;
 
@@ -196,6 +218,71 @@ export class CSGEngine {
     resultMesh.updateMatrixWorld(true);
 
     return resultMesh;
+  }
+
+  private clipGeometryToBounds(
+    geometry: THREE.BufferGeometry,
+    bounds?: { min: THREE.Vector3; max: THREE.Vector3 }
+  ): THREE.BufferGeometry {
+    if (!bounds) {
+      return geometry;
+    }
+
+    const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!position) {
+      return geometry;
+    }
+
+    const box = new THREE.Box3(bounds.min.clone(), bounds.max.clone());
+    const index = geometry.index;
+
+    const vertices: number[] = [];
+    const v0 = new THREE.Vector3();
+    const v1 = new THREE.Vector3();
+    const v2 = new THREE.Vector3();
+    const triBox = new THREE.Box3();
+
+    const pushVertex = (v: THREE.Vector3) => {
+      vertices.push(v.x, v.y, v.z);
+    };
+
+    const triangleCount = index ? index.count / 3 : position.count / 3;
+    for (let i = 0; i < triangleCount; i++) {
+      if (index) {
+        const a = index.getX(i * 3);
+        const b = index.getX(i * 3 + 1);
+        const c = index.getX(i * 3 + 2);
+        v0.fromBufferAttribute(position, a);
+        v1.fromBufferAttribute(position, b);
+        v2.fromBufferAttribute(position, c);
+      } else {
+        v0.fromBufferAttribute(position, i * 3);
+        v1.fromBufferAttribute(position, i * 3 + 1);
+        v2.fromBufferAttribute(position, i * 3 + 2);
+      }
+
+      triBox.setFromPoints([v0, v1, v2]);
+      if (!triBox.intersectsBox(box)) {
+        continue;
+      }
+
+      pushVertex(v0);
+      pushVertex(v1);
+      pushVertex(v2);
+    }
+
+    if (vertices.length === 0) {
+      return new THREE.BufferGeometry();
+    }
+
+    const clipped = new THREE.BufferGeometry();
+    const posArray = new Float32Array(vertices);
+    clipped.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+    this.ensureUVs(clipped);
+    this.ensureNormals(clipped);
+    clipped.computeBoundingBox();
+    clipped.computeBoundingSphere();
+    return clipped;
   }
 
   /**
